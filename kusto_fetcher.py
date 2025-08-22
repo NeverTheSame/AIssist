@@ -2,12 +2,15 @@ import os
 import csv
 import time
 import json
+import base64
+import requests
 from azure.identity import InteractiveBrowserCredential
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 import re
 from azure.kusto.data.exceptions import KustoNetworkError
 from datetime import datetime
 import traceback
+from config import config
 
 # Token cache file
 TOKEN_CACHE_FILE = ".kusto_token_cache.json"
@@ -51,8 +54,8 @@ def _get_valid_token():
     print("Authenticating with Azure...")
     credential = InteractiveBrowserCredential()
     
-    # Get token scope from environment variable
-    token_scope = os.environ.get('AZURE_KUSTO_TOKEN_SCOPE', 'https://your-cluster.kusto.windows.net/.default')
+    # Get token scope from config
+    token_scope = config.azure_kusto_token_scope
     token_response = credential.get_token(token_scope)
     token = token_response.token
     expires_at = token_response.expires_on
@@ -63,31 +66,151 @@ def _get_valid_token():
     
     return token
 
+def download_screenshot_from_data_url(data_url, output_path):
+    """
+    Download a screenshot from a data URL and save it to the specified path.
+    
+    Args:
+        data_url (str): The complete data URL (e.g., "data:image/png;base64,iVBORw0...")
+        output_path (str): Path where to save the screenshot
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Extract the base64 data from the URL
+        if ',' not in data_url:
+            print(f"[kusto_fetcher] Invalid data URL format: {data_url[:100]}...")
+            return False
+        
+        # Split by comma to get the base64 data
+        header, base64_data = data_url.split(',', 1)
+        
+        # Validate it's an image
+        if not header.startswith('data:image/'):
+            print(f"[kusto_fetcher] Not an image data URL: {header}")
+            return False
+        
+        # Decode base64 data
+        try:
+            image_data = base64.b64decode(base64_data)
+        except Exception as e:
+            print(f"[kusto_fetcher] Failed to decode base64 data: {e}")
+            return False
+        
+        # Determine file extension from MIME type
+        mime_type = header.split(';')[0].split(':')[1]
+        extension_map = {
+            'image/png': '.png',
+            'image/jpeg': '.jpg',
+            'image/jpg': '.jpg',
+            'image/gif': '.gif',
+            'image/svg+xml': '.svg',
+            'image/webp': '.webp'
+        }
+        extension = extension_map.get(mime_type, '.bin')
+        
+        # Ensure output path has correct extension
+        if not output_path.endswith(extension):
+            output_path = output_path + extension
+        
+        # Save the image
+        with open(output_path, 'wb') as f:
+            f.write(image_data)
+        
+        print(f"[kusto_fetcher] Screenshot saved: {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"[kusto_fetcher] Error downloading screenshot: {e}")
+        return False
+
+def extract_and_download_screenshots(text, incident_number, output_dir):
+    """
+    Extract data URLs from text and download screenshots.
+    
+    Args:
+        text (str): Text containing data URLs
+        incident_number (str): Incident number for naming files
+        output_dir (str): Directory to save screenshots
+    
+    Returns:
+        tuple: (processed_text, screenshot_count)
+    """
+    if not isinstance(text, str):
+        return text, 0
+    
+    # Pattern to match data URLs
+    data_url_pattern = re.compile(
+        r'data:image/[^;]+;base64,[A-Za-z0-9+/=]+',
+        re.IGNORECASE | re.DOTALL
+    )
+    
+    screenshot_count = 0
+    processed_text = text
+    
+    # Find all data URLs
+    matches = data_url_pattern.findall(text)
+    
+    for i, data_url in enumerate(matches):
+        # Create unique filename for each screenshot
+        screenshot_filename = f"screenshot_{incident_number}_{i+1:03d}"
+        screenshot_path = os.path.join(output_dir, screenshot_filename)
+        
+        # Download the screenshot
+        if download_screenshot_from_data_url(data_url, screenshot_path):
+            screenshot_count += 1
+            # Replace the data URL in text with a reference to the saved file
+            filename = os.path.basename(screenshot_path)
+            if filename.endswith('.bin'):
+                # Try to determine extension from the data URL
+                if 'image/png' in data_url:
+                    filename = filename.replace('.bin', '.png')
+                elif 'image/jpeg' in data_url or 'image/jpg' in data_url:
+                    filename = filename.replace('.bin', '.jpg')
+                elif 'image/svg+xml' in data_url:
+                    filename = filename.replace('.bin', '.svg')
+            
+            # Replace the data URL with a reference
+            processed_text = processed_text.replace(data_url, f"[SCREENSHOT: {filename}]")
+    
+    return processed_text, screenshot_count
+
 def remove_img_data_tags(text):
     """
-    Replace all <img ...src="data:image..."> tags (even multiline, any attributes) with a placeholder.
+    Replace encrypted image data in various formats with REDACTED.
+    Handles:
+    - <img src="data:image/png;base64,ENCRYPTED_DATA">
+    - <img src="data:image/svg+xml;base64,ENCRYPTED_DATA">
+    - background-image: url("data:image/svg+xml;base64,ENCRYPTED_DATA")
+    - Any other data:image/*;base64,ENCRYPTED_DATA patterns
     """
     if not isinstance(text, str):
         return text
-    img_tag_pattern = re.compile(
-        r'<img\b[^>]*src\s*=\s*([\'\"])data:image.*?\1[^>]*?>',
+    
+    # Pattern to match any data:image/*;base64, followed by the encrypted data
+    # This handles img tags, background-image CSS, and other data URL patterns
+    data_url_pattern = re.compile(
+        r'(data:image/[^;]+;base64,)[A-Za-z0-9+/=]+',
         re.IGNORECASE | re.DOTALL
     )
-    return img_tag_pattern.sub('[IMAGE DATA SHRUNK - TODO: handle image data]', text)
+    
+    # Replace the encrypted data part with REDACTED
+    return data_url_pattern.sub(r'\1REDACTED', text)
 
 def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms"):
     """
-    Fetch incident details from Azure Data Explorer and save as CSV in the icms directory.
+    Fetch incident details from Azure Data Explorer and save as CSV in incident-specific folder.
     Args:
         incident_number (str or int): The incident number to fetch.
         kql_template_path (str): Path to the KQL query template file (should contain {incident_number}).
-        output_dir (str): Directory to save the CSV file.
+        output_dir (str): Base directory to save the incident folder.
     Returns:
         str: Path to the saved CSV file.
     """
-    # Get cluster and database from environment variables
-    cluster = os.environ.get('AZURE_KUSTO_CLUSTER', 'https://your-cluster.kusto.windows.net')
-    database = os.environ.get('AZURE_KUSTO_DATABASE', 'YourDatabase')
+    # Get cluster and database from config
+    cluster = config.azure_kusto_cluster
+    database = config.azure_kusto_database
     
     # Get valid token (cached if not expired)
     token = _get_valid_token()
@@ -103,13 +226,32 @@ def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms")
     if not queries:
         raise ValueError(f"No queries found in {kql_template_path}")
 
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"{incident_number}.csv")
-    section_headers = ["Discussions", "Internal AI Summary"]
+    # Filter out commented queries (lines starting with //)
+    active_queries = []
+    for query in queries:
+        lines = query.split('\n')
+        active_lines = [line for line in lines if not line.strip().startswith('//')]
+        if active_lines:
+            active_query = '\n'.join(active_lines).strip()
+            if active_query:
+                active_queries.append(active_query)
+
+    if not active_queries:
+        raise ValueError(f"No active queries found in {kql_template_path}")
+
+    # Create incident-specific folder
+    incident_folder = os.path.join(output_dir, str(incident_number))
+    os.makedirs(incident_folder, exist_ok=True)
+    
+    output_path = os.path.join(incident_folder, f"{incident_number}.csv")
+    section_headers = ["Discussions", "Authored summary"]
+    
+    total_screenshots = 0
+    authored_summary_text = ""
+    
     with open(output_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
-        image_data_shrunk = False  # Track if we've shrunk any image data
-        for idx, query in enumerate(queries):
+        for idx, query in enumerate(active_queries):
             if idx > 0:
                 writer.writerow([])  # Blank line between sections
             # Write section header
@@ -124,15 +266,36 @@ def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms")
             for row in table:
                 processed_row = []
                 for cell in row:
+                    # For authored summary section, collect text for screenshot processing
+                    if idx == 1 and isinstance(cell, str):  # Authored summary section
+                        authored_summary_text += cell + "\n"
+                    
+                    # For now, still use the old redaction method in CSV
                     cleaned_cell = remove_img_data_tags(cell)
-                    if isinstance(cell, str) and cleaned_cell != cell:
-                        if not image_data_shrunk:
-                            print("[kusto_fetcher] NOTE: Image data detected and shrunk in CSV output. TODO: Find a way to process this data.")
-                            image_data_shrunk = True
-                        processed_row.append('[IMAGE DATA SHRUNK - TODO: handle image data]')
-                    else:
-                        processed_row.append(cell)
+                    processed_row.append(cleaned_cell)
                 writer.writerow(processed_row)
+    
+    # Process authored summary for screenshots
+    if authored_summary_text:
+        print(f"[kusto_fetcher] Processing authored summary for screenshots...")
+        processed_summary, screenshot_count = extract_and_download_screenshots(
+            authored_summary_text, 
+            str(incident_number), 
+            incident_folder
+        )
+        total_screenshots += screenshot_count
+        
+        # Save processed summary to a separate file
+        summary_path = os.path.join(incident_folder, f"{incident_number}_summary_processed.txt")
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(processed_summary)
+        
+        if screenshot_count > 0:
+            print(f"[kusto_fetcher] Downloaded {screenshot_count} screenshots to {incident_folder}")
+    
+    print(f"[kusto_fetcher] Incident data saved to: {incident_folder}")
+    print(f"[kusto_fetcher] Total screenshots downloaded: {total_screenshots}")
+    
     return output_path 
 
 def main():

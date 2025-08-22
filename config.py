@@ -50,6 +50,12 @@ class Config:
         self.azure_openai_api_version = os.environ.get('AZURE_OPENAI_API_VERSION')
         self.azure_openai_deployment_name = os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME')
         
+        # Azure OpenAI 5 Configuration
+        self.azure_openai_5_api_key = os.environ.get('AZURE_OPENAI_5_API_KEY')
+        self.azure_openai_5_endpoint = os.environ.get('AZURE_OPENAI_5_ENDPOINT')
+        self.azure_openai_5_api_version = os.environ.get('AZURE_OPENAI_5_API_VERSION')
+        self.azure_openai_5_deployment_name = os.environ.get('AZURE_OPENAI_5_DEPLOYMENT_NAME')
+        
         # Azure Kusto Configuration
         self.azure_kusto_cluster = os.environ.get('AZURE_KUSTO_CLUSTER', 'https://your-cluster.kusto.windows.net')
         self.azure_kusto_database = os.environ.get('AZURE_KUSTO_DATABASE', 'YourDatabase')
@@ -66,12 +72,12 @@ class Config:
         self.zai_output_cost = float(os.environ.get('ZAI_FLASH_OUTPUT_COST', '1.1'))  # Cost per 1M output tokens
         
         # OpenAI Configuration
-        self.openai_model_name = os.environ.get('OPENAI_MODEL_NAME', 'gpt-4-turbo-preview')
+        self.openai_model_name = os.environ.get('OPENAI_MODEL_NAME', 'gpt-5-mini')
         self.openai_input_cost = float(os.environ.get('OPENAI_INPUT_COST', '0.01'))  # Cost per 1K input tokens
         self.openai_output_cost = float(os.environ.get('OPENAI_OUTPUT_COST', '0.03'))  # Cost per 1K output tokens
         
-        # Azure Computer Vision Configuration
-        self.azure_vision_key = os.environ.get('AZURE_VISION_KEY')
+        # Azure Vision Configuration
+        self.azure_vision_key = os.environ.get('AZURE_OPENAI_API_KEY')
         self.azure_vision_endpoint = os.environ.get('AZURE_VISION_ENDPOINT')
         
         # Validate required configurations
@@ -87,6 +93,14 @@ class Config:
             'AZURE_OPENAI_DEPLOYMENT_NAME': self.azure_openai_deployment_name
         }
         
+        # Check Azure OpenAI 5 configuration
+        azure_5_config = {
+            'AZURE_OPENAI_5_API_KEY': self.azure_openai_5_api_key,
+            'AZURE_OPENAI_5_ENDPOINT': self.azure_openai_5_endpoint,
+            'AZURE_OPENAI_5_API_VERSION': self.azure_openai_5_api_version,
+            'AZURE_OPENAI_5_DEPLOYMENT_NAME': self.azure_openai_5_deployment_name
+        }
+        
         # Check OpenAI configuration
         openai_config = {
             'OPENAI_API_KEY': self.openai_api_key
@@ -100,13 +114,16 @@ class Config:
         
         # Validate that at least one of the configurations is complete
         azure_complete = all(azure_config.values())
+        azure_5_complete = all(azure_5_config.values())
         openai_complete = all(openai_config.values())
         zai_complete = all(zai_config.values())
         
-        if not (azure_complete or openai_complete or zai_complete):
+        if not (azure_complete or azure_5_complete or openai_complete or zai_complete):
             missing_vars = []
             if not azure_complete:
                 missing_vars.extend([k for k, v in azure_config.items() if not v])
+            if not azure_5_complete:
+                missing_vars.extend([k for k, v in azure_5_config.items() if not v])
             if not openai_complete:
                 missing_vars.extend([k for k, v in openai_config.items() if not v])
             if not zai_complete:

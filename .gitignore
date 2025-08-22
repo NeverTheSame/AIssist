@@ -16,3 +16,4 @@ query.kql
 molecular_examples.json
 prompts.json
 technical_patterns.json
+test-*.py

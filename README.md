@@ -4,8 +4,18 @@
 
 This tool automates the process of fetching incident data from Azure Data Explorer (Kusto), processes it, and generates summaries using Azure OpenAI by default. It supports persistent Azure authentication, so you only need to authenticate once per token lifetime.
 
+## Architecture
+
+The tool follows a three-stage pipeline:
+
+1. **Data Fetching** (`kusto_fetcher.py`): Fetches raw incident data from Azure Kusto and saves it as CSV files in incident-specific folders
+2. **Data Processing** (`transformer.py`): Transforms the raw CSV data into structured JSON format optimized for LLM processing
+3. **AI Analysis** (`processor.py`): Uses LLMs to generate insights, summaries, and recommendations from the processed data
+
 ## Features
-- **Automatic CSV Fetching**: Provide an incident number, and the tool fetches the relevant data from Azure Kusto.
+- **Automatic CSV Fetching**: Provide incident number(s), and the tool fetches the relevant data from Azure Kusto.
+- **Screenshot Extraction**: Automatically downloads and saves embedded screenshots from incident data.
+- **Multi-Incident Support**: Process multiple incidents simultaneously and generate unified summaries.
 - **Persistent Azure Authentication**: Auth token is cached locally and reused until it expires (no repeated browser logins).
 - **Default Azure OpenAI Usage**: Summarization and processing use Azure OpenAI by default.
 - **Interactive Prompt Selection**: When no prompt type is specified, the tool presents an interactive menu of available molecular prompt types.
@@ -175,6 +185,12 @@ ZAI_MODEL_NAME=glm-4.5-air
 python main.py <incident_number> [options]
 ```
 
+### Multi-Incident Command
+
+```bash
+python main.py <incident_number1> <incident_number2> ... [options]
+```
+
 ### Options
 - `--prompt-type TYPE`   Type of prompt (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, etc.)
 - `--azure`              Explicitly use Azure OpenAI (default behavior)
@@ -182,10 +198,14 @@ python main.py <incident_number> [options]
 - `--debug_api`          Enable API debugging
 - `--summ`               Include summary from summary.txt
 - `--summ-docx`          Use summary.docx as input
+- `--troubleshooting-plan` Generate troubleshooting plan mode (first incident is primary, others are historical references)
 
 **Note:** If no `--prompt-type` is specified, the tool will display an interactive menu showing only molecular prompt types for selection.
 
 ### Example Usage
+
+#### Complete Workflow (Recommended)
+The `main.py` script handles the entire pipeline automatically:
 
 Fetch, process, and summarize an incident with interactive prompt selection:
 ```bash
@@ -202,27 +222,85 @@ Fetch, process, and summarize with molecular context (dynamic examples):
 python main.py 654045297 --prompt-type escalation_molecular
 ```
 
-Fetch and process with summary from summary.txt:
-```bash
-python main.py 654045297 --summ
-```
-
-Fetch and process with summary.docx:
-```bash
-python main.py 654045297 --summ-docx
-```
-
 Use ZAI instead of Azure OpenAI:
 ```bash
 python main.py 654045297 --zai
 ```
 
+Process multiple incidents with unified summarization:
+```bash
+python main.py 654045297 654045298 654045299 --prompt-type escalation_molecular
+```
+
+Generate troubleshooting plan based on historical incidents:
+```bash
+python main.py 654045297 654045298 654045299 654045300 --troubleshooting-plan
+```
+
+#### Manual Stage-by-Stage Processing
+You can also run each stage manually:
+
+**Stage 1: Fetch data from Kusto**
+```bash
+python kusto_fetcher.py 654045297
+```
+
+**Stage 2: Process CSV to JSON**
+```bash
+python transformer.py icms/654045297/654045297.csv
+```
+
+**Stage 3: Generate AI insights**
+```bash
+python processor.py processed_incidents/654045297.json --prompt-type escalation_molecular
+```
+
 ### How It Works
-1. **Fetches incident data from Azure Kusto** using the incident number and your `query.kql` template.
+
+The tool follows a three-stage pipeline:
+
+#### Stage 1: Data Fetching (`kusto_fetcher.py`)
+1. **Fetches incident data from Azure Kusto** using the incident number(s) and your `query.kql` template.
 2. **Caches the Azure authentication token** in `.kusto_token_cache.json` for reuse until it expires.
-3. **Processes and summarizes the incident** using Azure OpenAI (or ZAI if specified).
-4. **Outputs results** to the appropriate directories (`icms/`, `processed_incidents/`, `summaries/`).
+3. **Creates incident-specific folders** (e.g., `icms/664099798/`) for each incident.
+4. **Downloads embedded screenshots** from data URLs and saves them as image files.
+5. **Saves raw data** as CSV files in the incident folders.
+
+#### Stage 2: Data Processing (`transformer.py`)
+1. **Reads the raw CSV data** from incident-specific folders.
+2. **Cleans and structures the data** by removing HTML formatting and filtering unwanted entries.
+3. **Extracts authored summaries** and processes them for LLM consumption.
+4. **Outputs structured JSON** files optimized for LLM processing.
+
+#### Stage 3: AI Analysis (`processor.py`)
+1. **For single incidents**: Processes and summarizes the incident using Azure OpenAI (or ZAI if specified).
+2. **For multiple incidents**: Combines all incident data and generates a unified summary.
+3. **For troubleshooting plan mode**: Analyzes the first incident as the primary issue and uses other incidents as historical references to generate a comprehensive troubleshooting plan.
+4. **Outputs results** to the appropriate directories (`processed_incidents/`, `summaries/`).
 5. **If a `_molecular` prompt type is used**, the tool dynamically selects relevant examples from `molecular_examples.json` and injects them into the prompt for improved context and summary quality.
+
+### Troubleshooting Plan Mode
+
+The `--troubleshooting-plan` mode is designed to help create comprehensive troubleshooting plans for unresolved incidents by analyzing patterns from previously resolved similar incidents.
+
+**How it works:**
+1. **Primary Incident**: The first incident number provided is treated as the current unresolved issue that needs a troubleshooting plan.
+2. **Historical References**: All subsequent incident numbers are treated as resolved incidents that contain valuable insights and successful resolution strategies.
+3. **Pattern Analysis**: The AI analyzes the historical incidents to identify common root causes, successful troubleshooting approaches, and resolution strategies.
+4. **Plan Generation**: Based on the patterns found, it creates a structured, step-by-step troubleshooting plan specifically tailored to the primary incident.
+
+**Example workflow:**
+```bash
+# Generate troubleshooting plan for incident 1111 using insights from resolved incidents 22222, 33333, 4444
+python main.py 1111 22222 33333 4444 --troubleshooting-plan
+```
+
+**Output includes:**
+- Primary incident analysis
+- Pattern analysis from historical incidents
+- Step-by-step troubleshooting plan
+- Risk assessment for each step
+- Success criteria and escalation points
 
 ## Customizing Prompts and Molecular Context
 
@@ -240,6 +318,34 @@ python main.py 654045297 --zai
   3. Each example should include `keywords`, `severity`, `category`, and an `example` object with `input` and `output` fields.
 - This allows the summarizer to adapt its context to the specifics of each incident, improving the quality and relevance of generated summaries.
 
+## Folder Structure
+
+After running the tool, you'll have the following structure:
+
+```
+icms/
+├── 664099798/                    # Incident-specific folder
+│   ├── 664099798.csv            # Raw CSV data from Kusto
+│   ├── 664099798_summary_processed.txt  # Processed summary with screenshot references
+│   ├── screenshot_664099798_001.png     # Downloaded screenshots
+│   ├── screenshot_664099798_002.jpg
+│   └── ...
+├── 672325151/
+│   ├── 672325151.csv
+│   └── ...
+└── ...
+
+processed_incidents/
+├── 664099798.json               # Structured JSON for LLM processing
+├── 672325151.json
+└── ...
+
+summaries/
+├── 664099798.json               # AI-generated summaries
+├── 672325151.json
+└── ...
+```
+
 ## Requirements
 - Python 3.8+
 - Azure Kusto and OpenAI access
@@ -251,6 +357,8 @@ python main.py 654045297 --zai
 - For Kusto query issues, check your `query.kql` template and Azure permissions.
 - If you encounter errors about missing or malformed `molecular_examples.json`, ensure the file exists and is valid JSON.
 - If the interactive prompt menu doesn't appear, ensure `prompts.json` contains molecular prompt types (ending with `_molecular`).
+- If `transformer.py` can't find CSV files, check that they're in the new incident-specific folders (e.g., `icms/664099798/664099798.csv`).
+- For screenshot download issues, ensure the incident data contains valid data URLs and the output directories are writable.
 
 ## License
 MIT
