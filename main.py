@@ -112,7 +112,11 @@ def fetch_incident_data(incident_number):
         return False
 
     # Check if the CSV file is empty or only contains the placeholder line
-    csv_path = os.path.join("icms", f"{incident_number}.csv")
+    # Try the new incident-specific folder structure first, then fall back to flat structure
+    csv_path = os.path.join("icms", str(incident_number), f"{incident_number}.csv")
+    if not os.path.exists(csv_path):
+        # Fall back to flat structure for backward compatibility
+        csv_path = os.path.join("icms", f"{incident_number}.csv")
     logger.info(f"Checking CSV file: {csv_path}")
     
     is_empty = False
@@ -142,7 +146,11 @@ def process_incident_to_json(incident_number):
     logger.info(f"Starting CSV to JSON conversion for incident {incident_number}")
     print(f"Processing CSV to JSON for incident {incident_number}...")
     
-    csv_path = os.path.join("icms", f"{incident_number}.csv")
+    # Try the new incident-specific folder structure first, then fall back to flat structure
+    csv_path = os.path.join("icms", str(incident_number), f"{incident_number}.csv")
+    if not os.path.exists(csv_path):
+        # Fall back to flat structure for backward compatibility
+        csv_path = os.path.join("icms", f"{incident_number}.csv")
     logger.info(f"Processing CSV file: {csv_path}")
     
     try:

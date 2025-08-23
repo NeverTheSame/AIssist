@@ -49,6 +49,7 @@ class Config:
         self.azure_openai_endpoint = os.environ.get('AZURE_OPENAI_ENDPOINT')
         self.azure_openai_api_version = os.environ.get('AZURE_OPENAI_API_VERSION')
         self.azure_openai_deployment_name = os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME')
+        self.azure_openai_embedding_deployment_name = os.environ.get('AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME')
         
         # Azure OpenAI 5 Configuration
         self.azure_openai_5_api_key = os.environ.get('AZURE_OPENAI_5_API_KEY')

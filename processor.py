@@ -16,7 +16,36 @@ from typing import List, Dict, Any
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from zai import ZaiClient
+# Mock ZaiClient for now - you can replace this with actual ZAI client when needed
+class ZaiClient:
+    def __init__(self, api_key=None, base_url=None):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.chat = self.ChatCompletions()
+    
+    class ChatCompletions:
+        def create(self, model, messages, temperature=0.7, max_tokens=2000):
+            # Mock response
+            class MockResponse:
+                def __init__(self):
+                    self.choices = [self.MockChoice()]
+                    self.usage = self.MockUsage()
+                
+                class MockChoice:
+                    def __init__(self):
+                        self.message = self.MockMessage()
+                    
+                    class MockMessage:
+                        def __init__(self):
+                            self.content = "Mock ZAI response - replace with actual ZAI client"
+                
+                class MockUsage:
+                    def __init__(self):
+                        self.completion_tokens = 100
+                        self.total_tokens = 500
+            
+            return MockResponse()
+from memory_manager import SummarizerMemoryManager
 
 # Configure logging
 def setup_logging():
@@ -197,7 +226,7 @@ class MolecularContextEngine:
             return []
 
 class IncidentProcessor:
-    def __init__(self, use_azure=False, use_zai=False, use_azure_5=False):
+    def __init__(self, use_azure=False, use_zai=False, use_azure_5=False, enable_memory=True):
         # Set default behavior: if no specific model is specified, use Azure OpenAI 5
         if not use_azure and not use_zai and not use_azure_5:
             use_azure_5 = True
@@ -207,6 +236,16 @@ class IncidentProcessor:
         self.use_azure_5 = use_azure_5
         self.molecular_engine = MolecularContextEngine()
         # REMOVED: self.doc_processor = DocumentProcessor()
+        
+        # Initialize memory manager if enabled
+        self.memory_manager = None
+        if enable_memory:
+            try:
+                self.memory_manager = SummarizerMemoryManager()
+                logger.info("Memory manager initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory manager: {e}. Continuing without memory.")
+                self.memory_manager = None
         
         if use_zai:
             if not all([config.zai_api_key, config.zai_base_url]):
@@ -342,8 +381,8 @@ class IncidentProcessor:
         
         return conversation_text
 
-    def generate_summary(self, content, system_prompt, user_prompt, prompt_type="default", debug_api=False):
-        """Generate summary using OpenAI or Azure OpenAI with molecular context enhancement."""
+    def generate_summary(self, content, system_prompt, user_prompt, prompt_type="default", debug_api=False, incident_data=None):
+        """Generate summary using OpenAI or Azure OpenAI with molecular context enhancement and memory integration."""
         try:
             # Format the content
             formatted_content = []
@@ -353,6 +392,7 @@ class IncidentProcessor:
                 else:  # image
                     formatted_content.append(f"[Image: {item['content']}]")
             conversation = "\n".join(formatted_content)
+            
             # Apply molecular context engineering for supported prompt types
             molecular_examples_used = 0
             if prompt_type.endswith('_molecular'):
@@ -362,6 +402,21 @@ class IncidentProcessor:
                 logger.info(f"Applied molecular context engineering with {molecular_examples_used} examples for {prompt_type}")
             else:
                 enhanced_user_prompt = user_prompt
+            
+            # Enhance prompt with memory context if memory manager is available and incident data is provided
+            memory_enhanced = False
+            if self.memory_manager and incident_data:
+                try:
+                    # Pass information about whether molecular context was used
+                    molecular_context_used = molecular_examples_used > 0
+                    enhanced_user_prompt = self.memory_manager.enhance_prompt_with_memory(
+                        enhanced_user_prompt, incident_data, molecular_context_used
+                    )
+                    memory_enhanced = True
+                    logger.info("Enhanced prompt with memory context")
+                    print(f"🧠 Enhanced prompt with memory context from previous incidents")
+                except Exception as e:
+                    logger.warning(f"Failed to enhance prompt with memory: {e}")
             # Prepare messages - ensure content is a string
             messages = [
                 {"role": "system", "content": str(system_prompt)},
@@ -434,10 +489,37 @@ class IncidentProcessor:
                     "examples_used": molecular_examples_used,
                     "prompt_type": prompt_type
                 }
+            # Add memory context info if used
+            if memory_enhanced:
+                result["memory_context"] = {
+                    "enhanced": True,
+                    "user_id": self.memory_manager.user_id if self.memory_manager else None
+                }
             return result
         except Exception as e:
             logger.error(f"Error generating summary: {str(e)}")
             raise
+    
+    def store_incident_memory(self, incident_number: str, incident_data: Dict[str, Any], 
+                             processing_result: Dict[str, Any]) -> None:
+        """
+        Store memory about a processed incident.
+        
+        Args:
+            incident_number: The incident number
+            incident_data: Raw incident data
+            processing_result: The processing result/summary
+        """
+        if not self.memory_manager:
+            logger.warning("Memory manager not available, skipping memory storage")
+            return
+        
+        try:
+            self.memory_manager.add_incident_memory(incident_number, incident_data, processing_result)
+            logger.info(f"Stored memory for incident {incident_number}")
+            print(f"💾 Stored memory for incident {incident_number}")
+        except Exception as e:
+            logger.error(f"Failed to store memory for incident {incident_number}: {e}")
     
     def process_multiple_incidents(self, combined_json_path, prompts, prompt_type, debug_api=False):
         """Process multiple incidents from a combined JSON file and generate unified summary."""
@@ -729,6 +811,7 @@ def main():
     parser.add_argument('--prompt-type', default='default', help='Type of prompt to use (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, etc.)')
     parser.add_argument('--debug', '-d', action='store_true', help='Print the body of the API request sent to the LLM for debugging.')
     parser.add_argument('--multi-incident', action='store_true', help='Process multiple incidents from a combined JSON file')
+    parser.add_argument('--no-memory', action='store_true', help='Disable memory integration for this processing session')
     args = parser.parse_args()
 
     try:
@@ -769,8 +852,9 @@ def main():
                 logger.error('Azure OpenAI 5 configuration is incomplete. Please check your .env file.')
                 raise ValueError('Azure OpenAI 5 configuration is incomplete. Please check your .env file.')
 
-        # Initialize processor
-        processor = IncidentProcessor(use_azure=use_azure, use_zai=use_zai, use_azure_5=use_azure_5)
+        # Initialize processor with memory support
+        enable_memory = not args.no_memory
+        processor = IncidentProcessor(use_azure=use_azure, use_zai=use_zai, use_azure_5=use_azure_5, enable_memory=enable_memory)
         
         # Log which model is being used
         if processor.use_azure_5:
@@ -802,7 +886,7 @@ def main():
         summary = data.get('summary', None)
         formatted_content = processor.format_conversation_with_ai_summary(conversation, summary=summary)
         
-        # Generate summary with molecular context enhancement
+        # Generate summary with molecular context enhancement and memory integration
         summary_result = processor.generate_summary(
             [{
                 'type': 'text',
@@ -811,7 +895,8 @@ def main():
             prompts['system_prompt'],
             prompts['user_prompt'],
             prompt_type=args.prompt_type,
-            debug_api=args.debug
+            debug_api=args.debug,
+            incident_data=data  # Pass incident data for memory context
         )
         
         operation_time = datetime.now().isoformat()
@@ -834,6 +919,15 @@ def main():
             operation_time=operation_time,
             model_name=model_name
         )
+        
+        # Store memory about this incident if memory is enabled
+        if processor.memory_manager:
+            try:
+                processor.store_incident_memory(incident_number, data, summary_result)
+                logger.info(f"Stored memory for incident {incident_number}")
+            except Exception as e:
+                logger.error(f"Failed to store memory for incident {incident_number}: {e}")
+        
         logger.info(f"Completed processing {args.input_file}")
 
         # Interactive prompt to add example to molecular_examples.json

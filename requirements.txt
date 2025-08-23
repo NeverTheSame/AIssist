@@ -9,5 +9,6 @@ Pillow>=10.0.0
 azure-cognitiveservices-vision-computervision>=0.9.0 
 azure-kusto-data
 azure-identity 
-sklearn
-z_ai
+scikit-learn
+zai
+mem0ai

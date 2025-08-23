@@ -21,6 +21,7 @@ The tool follows a three-stage pipeline:
 - **Interactive Prompt Selection**: When no prompt type is specified, the tool presents an interactive menu of available molecular prompt types.
 - **Flexible Argument Passing**: Pass summarization and prompt options directly from the command line.
 - **Dynamic Molecular Context**: Prompts can be dynamically enhanced with relevant incident examples from a configurable file (`molecular_examples.json`).
+- **Memory Integration**: Uses [mem0](https://github.com/mem0ai/mem0) for persistent memory across processing sessions, providing context-aware analysis based on previous incidents.
 
 ## Setup
 
@@ -302,6 +303,183 @@ python main.py 1111 22222 33333 4444 --troubleshooting-plan
 - Risk assessment for each step
 - Success criteria and escalation points
 
+## Memory Integration
+
+The summarizer includes memory integration using [mem0](https://github.com/mem0ai/mem0), a universal memory layer for AI agents. This enables the tool to learn from previous incidents and provide more context-aware analysis.
+
+### How Memory Works
+
+- **Persistent Memory**: Stores information about processed incidents, including summaries, key findings, and technical details
+- **Context Enhancement**: Searches for relevant previous incidents and enhances prompts with this context
+- **Improved Consistency**: Maintains consistency in analysis and recommendations across similar incidents
+- **Learning Over Time**: Becomes more effective at identifying patterns as more incidents are processed
+- **Cross-Session Persistence**: Memory persists across different processing sessions
+
+### Memory vs Molecular Examples
+
+**Molecular Examples** (`molecular_examples.json`):
+- Curated, high-quality examples you manually select
+- Immediate availability and consistent quality
+- Organized by prompt type with keywords and categories
+- Best for: Standard scenarios and quality control
+
+**Mem0 Memory**:
+- Automatically learns from every processed incident
+- Builds up over time with real processing results
+- Provides dynamic, contextual relevance
+- Best for: Learning from actual outcomes and patterns
+
+**Integration**: When both are used together, molecular examples provide the foundation, and memory adds real-world context from your actual processing history.
+
+### Vector Database Architecture
+
+The summarizer uses Qdrant as its vector database, which provides several key benefits:
+
+#### Semantic Search Capabilities
+- **Vector Embeddings**: Each incident memory is converted to a high-dimensional vector using Azure OpenAI embeddings
+- **Similarity Search**: Finds the most semantically similar incidents based on content, not just keywords
+- **Fast Retrieval**: Optimized for real-time search across large memory databases
+
+#### Storage Benefits
+- **Persistent Storage**: Vector database persists across sessions and project iterations
+- **Cross-Project Sharing**: Multiple projects can share the same memory database
+- **Scalable**: Handles thousands of incident memories efficiently
+- **No Data Loss**: Memory survives project deletion/recreation
+
+#### Technical Details
+- **Embedding Model**: Azure OpenAI text-embedding-ada-002 (1536 dimensions)
+- **Distance Metric**: Cosine similarity for semantic matching
+- **Storage Type**: File-based persistent storage (not in-memory)
+- **Collection**: Single collection named "mem0" for all memories
+
+### Using Memory
+
+Memory is enabled by default. Simply run your processor as usual:
+
+```bash
+python processor.py incident.json --prompt-type escalation_molecular
+```
+
+The processor will automatically:
+1. Store the processing result in memory
+2. Enhance future prompts with relevant context from previous incidents
+
+#### Terminal Output
+
+When memory is active, you'll see confirmation messages in the terminal:
+
+```
+✅ Using mem0 with Azure OpenAI embeddings for memory storage and semantic search
+🧠 Enhanced prompt with memory context from previous incidents
+💾 Stored memory for incident 123456789
+```
+
+These messages confirm that:
+- mem0 is successfully initialized with vector database
+- Memory context was added to the prompt
+- Incident data was stored in the vector database
+
+**Disable Memory**: Use the `--no-memory` flag to disable memory for a specific processing session:
+```bash
+python processor.py incident.json --no-memory
+```
+
+### Memory Storage
+
+The summarizer uses [mem0](https://github.com/mem0ai/mem0) with [Qdrant](https://qdrant.tech/) as the vector database for semantic memory storage. Memories are stored in two locations:
+
+#### Vector Database (Qdrant)
+- **Location**: `~/.mem0/migrations_qdrant/`
+- **Purpose**: Stores high-dimensional vector embeddings for semantic search
+- **Technology**: Qdrant vector database with Azure OpenAI embeddings
+- **Benefits**: Enables fast similarity search across incident memories
+
+#### Metadata Database (SQLite)
+- **Location**: `~/.mem0/history.db`
+- **Purpose**: Stores conversation history, metadata, and full memory content
+- **Technology**: SQLite database for structured data storage
+
+#### Configuration
+- **Location**: `~/.mem0/config.json`
+- **Purpose**: mem0 configuration settings
+
+#### Legacy File-Based Storage (Fallback)
+When mem0 is not available, memories fall back to JSON files in the `memory/` directory:
+- `memory/memory_summarizer_user.json` - Default user memories
+- `memory/memory_[user_id].json` - User-specific memories
+- `memory/memory_config.json` - Memory configuration
+
+Each memory entry contains:
+- Incident number and timestamp
+- Incident type, severity, and description
+- Processing summary and key findings
+- Technical details and recommendations
+
+### Memory Configuration
+
+Configure memory behavior using `memory_config.json`:
+
+```json
+{
+  "memory_integration": {
+    "enabled": true,
+    "priority": "complementary",
+    "max_memory_context_length": 1000,
+    "memory_search_limit": 3,
+    "enable_memory_for_molecular": true
+  },
+  "molecular_integration": {
+    "preserve_molecular_examples": true,
+    "molecular_examples_priority": "high",
+    "allow_memory_enhancement": true
+  }
+}
+```
+
+**Key Settings**:
+- `enabled`: Enable/disable memory integration
+- `enable_memory_for_molecular`: Whether to use memory with molecular prompts
+- `max_memory_context_length`: Maximum length of memory context
+- `memory_search_limit`: Number of relevant memories to include
+
+### Example Output
+
+**Original Prompt**:
+```
+Please analyze this incident and provide a comprehensive summary.
+```
+
+**Enhanced Prompt (with Memory)**:
+```
+Please analyze this incident and provide a comprehensive summary.
+
+Context from previous similar incidents:
+Previous similar incidents:
+1. Incident INC-001: Security incident resolved by implementing MFA and blocking suspicious IPs.
+2. Incident INC-002: Performance issue caused by inefficient queries, resolved by adding indexes.
+
+Use this context to provide more informed and consistent analysis.
+```
+
+**Enhanced Prompt (with Molecular + Memory)**:
+```
+[Your molecular examples here]
+
+Additional context from previous similar incidents:
+Previous similar incidents:
+1. Incident INC-001: Security incident resolved by implementing MFA and blocking suspicious IPs.
+
+Use this additional context alongside the provided examples for more informed analysis.
+```
+
+### Memory File Management
+
+- **Automatic Creation**: Memory directory is created automatically when needed
+- **Git Ignored**: Memory files won't clutter your repository
+- **Organized**: All memory-related files in one place
+- **Flexible**: Easy to manage and backup memory data
+- **Manual Control**: You can manually inspect, edit, or delete memory files if needed
+
 ## Customizing Prompts and Molecular Context
 
 ### Prompt Templates (`prompts.json`)
@@ -344,6 +522,11 @@ summaries/
 ├── 664099798.json               # AI-generated summaries
 ├── 672325151.json
 └── ...
+
+memory/                          # Memory storage (git-ignored)
+├── memory_config.json           # Memory configuration
+├── memory_summarizer_user.json  # User memories
+└── ...
 ```
 
 ## Requirements
@@ -359,6 +542,8 @@ summaries/
 - If the interactive prompt menu doesn't appear, ensure `prompts.json` contains molecular prompt types (ending with `_molecular`).
 - If `transformer.py` can't find CSV files, check that they're in the new incident-specific folders (e.g., `icms/664099798/664099798.csv`).
 - For screenshot download issues, ensure the incident data contains valid data URLs and the output directories are writable.
+- **Memory Issues**: If memory isn't working, check that `memory_config.json` exists and `enabled` is set to `true`, or verify that the `--no-memory` flag is not being used.
+- **Vector Database Issues**: If you see "Using file-based memory system" instead of mem0, ensure `AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME` is set in your `.env` file. The vector database is stored in `~/.mem0/` and persists across sessions.
 
 ## License
 MIT

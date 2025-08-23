@@ -3,7 +3,7 @@
 /summaries
 .kusto_token_cache.json
 .env
-/venv
+/venv*
 /__pycache__
 .DS_Store
 .env*
@@ -17,3 +17,5 @@ molecular_examples.json
 prompts.json
 technical_patterns.json
 test-*.py
+/memory
+/examples
