@@ -43,14 +43,35 @@ def clean_html_content(html_content):
     if not html_content:
         return ""
     
-    # Parse HTML with BeautifulSoup
-    soup = BeautifulSoup(html_content, "html.parser")
+    import re
     
-    # Remove all img tags with data:image/png src (encrypted images)
+    # First, use regex to remove any image tags with data:image/png or REDACTED content
+    # This handles both properly closed and malformed HTML where tags might not be properly closed
+    text = re.sub(r'<img[^>]*src=["\']?data:image/png[^>]*>', '', html_content, flags=re.IGNORECASE)
+    text = re.sub(r'<img[^>]*src=["\']?[^"\']*REDACTED[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<img[^>]*src=["\']?[^"\']*data:image/png[^>]*>', '', text, flags=re.IGNORECASE)
+    
+    # Handle malformed img tags that don't have proper closing > (like at end of lines)
+    text = re.sub(r'<img[^>]*src=["\']?data:image/png[^>]*[^>]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<img[^>]*src=["\']?[^"\']*REDACTED[^>]*[^>]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<img[^>]*src=["\']?[^"\']*data:image/png[^>]*[^>]', '', text, flags=re.IGNORECASE)
+    
+    # Also remove any remaining img tags that might be very long (likely base64)
+    text = re.sub(r'<img[^>]*src=["\']?[^"\']{1000,}[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<img[^>]*src=["\']?[^"\']{1000,}[^>]*[^>]', '', text, flags=re.IGNORECASE)
+    
+    # Parse HTML with BeautifulSoup
+    soup = BeautifulSoup(text, "html.parser")
+    
+    # Remove all remaining img tags with data:image/png src (encrypted images)
     for img in soup.find_all('img'):
         src = img.get('src', '')
-        if src.startswith('data:image/png'):
-            logger.info(f"Removing encrypted image: {src[:50]}...")
+        # Check for various patterns of encrypted/encoded images
+        if (src.startswith('data:image/png') or 
+            'data:image/png;base64' in src or 
+            'REDACTED' in src or
+            len(src) > 1000):  # Very long src attributes are likely base64 images
+            logger.info(f"Removing encrypted/encoded image: {src[:50]}...")
             img.decompose()
     
     # Remove other potentially problematic elements
@@ -71,7 +92,6 @@ def clean_html_content(html_content):
     text = soup.get_text(separator=' ', strip=True)
     
     # Clean up excessive whitespace and newlines
-    import re
     text = re.sub(r'\n\s*\n', '\n\n', text)  # Replace multiple newlines with double newlines
     text = re.sub(r' +', ' ', text)  # Replace multiple spaces with single space
     text = text.strip()

@@ -190,13 +190,25 @@ def remove_img_data_tags(text):
     
     # Pattern to match any data:image/*;base64, followed by the encrypted data
     # This handles img tags, background-image CSS, and other data URL patterns
+    # The pattern now properly handles quoted attributes and various base64 character sets
     data_url_pattern = re.compile(
-        r'(data:image/[^;]+;base64,)[A-Za-z0-9+/=]+',
+        r'(data:image/[^;]+;base64,)[A-Za-z0-9+/=_-]+',
         re.IGNORECASE | re.DOTALL
     )
     
     # Replace the encrypted data part with REDACTED
-    return data_url_pattern.sub(r'\1REDACTED', text)
+    processed_text = data_url_pattern.sub(r'\1REDACTED', text)
+    
+    # Also handle any remaining base64 data that might have been missed
+    # Look for any img tags with data URLs that still contain base64 data
+    img_data_pattern = re.compile(
+        r'(<img[^>]*src=["\'])(data:image/[^;]+;base64,)[A-Za-z0-9+/=_-]+([^"\']*["\'][^>]*>)',
+        re.IGNORECASE | re.DOTALL
+    )
+    
+    processed_text = img_data_pattern.sub(r'\1\2REDACTED\3', processed_text)
+    
+    return processed_text
 
 def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms"):
     """

@@ -19,3 +19,6 @@ technical_patterns.json
 test-*.py
 /memory
 /examples
+.cursorindexingignore
+.specstory/
+AGENTS.md

@@ -81,6 +81,9 @@ class Config:
         self.azure_vision_key = os.environ.get('AZURE_OPENAI_API_KEY')
         self.azure_vision_endpoint = os.environ.get('AZURE_VISION_ENDPOINT')
         
+        # Article Search Configuration
+        self.default_vector_db_path = os.environ.get('DEFAULT_VECTOR_DB_PATH')
+        
         # Validate required configurations
         self._validate_config()
     

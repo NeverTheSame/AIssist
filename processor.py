@@ -46,6 +46,141 @@ class ZaiClient:
             
             return MockResponse()
 from memory_manager import SummarizerMemoryManager
+from article_searcher import ArticleSearcher
+
+def run_gap_analysis_inline(incident_id: str, articles: List[Dict[str, Any]]):
+    """Run interactive gap analysis after article search."""
+    try:
+        # Import the gap analysis functions
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from simple_gap_analysis import display_articles, get_article_content, create_gap_analysis_prompt
+        
+        # Display articles for selection
+        display_articles(articles)
+        
+        # Get user selection
+        while True:
+            try:
+                selection = input(f"\nSelect an article (1-{len(articles)}) or 'q' to quit: ").strip()
+                
+                if selection.lower() == 'q':
+                    print("Skipping gap analysis.")
+                    return
+                
+                selection_num = int(selection)
+                if 1 <= selection_num <= len(articles):
+                    selected_article = articles[selection_num - 1]
+                    break
+                else:
+                    print(f"Please enter a number between 1 and {len(articles)}")
+            except ValueError:
+                print("Please enter a valid number")
+        
+        # Load incident data
+        incident_file = f"processed_incidents/{incident_id}.json"
+        if not os.path.exists(incident_file):
+            print(f"❌ Incident data not found: {incident_file}")
+            return
+        
+        with open(incident_file, 'r') as f:
+            incident_data = json.load(f)
+        
+        # Get article content
+        article_content = get_article_content(selected_article)
+        
+        # Create gap analysis prompt
+        gap_analysis_prompt = create_gap_analysis_prompt(incident_data, article_content)
+        
+        print("\n" + "="*80)
+        print("EXECUTING GAP ANALYSIS")
+        print("="*80)
+        print(f"Incident: {incident_id}")
+        print(f"Article: {selected_article.get('title', 'Unknown')}")
+        print("="*80)
+        
+        # Initialize Azure OpenAI client
+        client = AzureOpenAI(
+            api_key=config.azure_openai_api_key,
+            api_version=config.azure_openai_api_version,
+            azure_endpoint=config.azure_openai_endpoint
+        )
+        
+        # Load prompts from prompts.json
+        with open("prompts.json", "r") as f:
+            all_prompts = json.load(f)
+        
+        gap_analysis_prompts = all_prompts.get("troubleshooting_gap_analysis", {})
+        system_prompt = gap_analysis_prompts.get("system_prompt", "")
+        user_prompt = gap_analysis_prompts.get("user_prompt", "")
+        
+        # Create the full prompt by combining user prompt with incident and article data
+        # Create a more focused prompt that explicitly references the incident data
+        focused_user_prompt = f"""
+IMPORTANT: You must analyze the specific incident data provided below. Do NOT generate generic troubleshooting steps.
+
+INCIDENT DATA TO ANALYZE:
+{incident_data.get('summary', 'No summary available')}
+
+TROUBLESHOOTING ARTICLE CONTENT:
+{article_content}
+
+Your task is to:
+1. Analyze the SPECIFIC incident data above (Device Control policy issue on macOS)
+2. Compare it against the troubleshooting article procedures
+3. Identify gaps and create an execution plan
+
+Focus ONLY on the Device Control policy issue described in the incident data. Do NOT analyze network connectivity or any other generic issues.
+"""
+        
+        # Execute gap analysis with AI
+        print("🤖 Executing gap analysis with AI...")
+        response = client.chat.completions.create(
+            model=config.azure_openai_deployment_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": focused_user_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=4000
+        )
+        
+        # Handle different response structures
+        try:
+            gap_analysis_result = response.choices[0].message.content
+        except (AttributeError, IndexError) as e:
+            try:
+                gap_analysis_result = response.choices[0].content
+            except (AttributeError, IndexError):
+                try:
+                    gap_analysis_result = response.content
+                except AttributeError:
+                    gap_analysis_result = str(response)
+                    print(f"⚠️ Warning: Could not extract content from response, using string representation: {e}")
+        
+        # Save the gap analysis result
+        result_file = f"gap_analysis_{incident_id}_{selected_article.get('title', 'unknown').replace(' ', '_').replace('/', '_')}.txt"
+        with open(result_file, 'w') as f:
+            f.write(f"GAP ANALYSIS RESULTS\n")
+            f.write(f"Incident: {incident_id}\n")
+            f.write(f"Article: {selected_article.get('title', 'Unknown')}\n")
+            f.write("="*80 + "\n\n")
+            f.write(gap_analysis_result)
+        
+        print(f"\n✅ Gap analysis completed and saved to: {result_file}")
+        
+        # Display the results
+        print("\n" + "="*80)
+        print("GAP ANALYSIS RESULTS")
+        print("="*80)
+        print(gap_analysis_result)
+        print("="*80)
+        
+    except Exception as e:
+        logging.error(f"Error in interactive gap analysis: {e}")
+        print(f"❌ Error during gap analysis: {e}")
+        print("You can run gap analysis manually with: python3 simple_gap_analysis.py <incident_id>")
 
 # Configure logging
 def setup_logging():
@@ -226,7 +361,8 @@ class MolecularContextEngine:
             return []
 
 class IncidentProcessor:
-    def __init__(self, use_azure=False, use_zai=False, use_azure_5=False, enable_memory=True):
+    def __init__(self, use_azure=False, use_zai=False, use_azure_5=False, enable_memory=True, 
+                 articles_path=None, vector_db_path=None):
         # Set default behavior: if no specific model is specified, use Azure OpenAI 5
         if not use_azure and not use_zai and not use_azure_5:
             use_azure_5 = True
@@ -246,6 +382,22 @@ class IncidentProcessor:
             except Exception as e:
                 logger.warning(f"Failed to initialize memory manager: {e}. Continuing without memory.")
                 self.memory_manager = None
+        
+        # Initialize article searcher if paths are provided
+        self.article_searcher = None
+        if articles_path or vector_db_path:
+            try:
+                self.article_searcher = ArticleSearcher(
+                    articles_path=articles_path,
+                    vector_db_path=vector_db_path,
+                    use_azure=use_azure,
+                    use_azure_5=use_azure_5,
+                    use_zai=use_zai
+                )
+                logger.info("Article searcher initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize article searcher: {e}. Continuing without article search.")
+                self.article_searcher = None
         
         if use_zai:
             if not all([config.zai_api_key, config.zai_base_url]):
@@ -521,6 +673,70 @@ class IncidentProcessor:
         except Exception as e:
             logger.error(f"Failed to store memory for incident {incident_number}: {e}")
     
+    def process_article_search(self, incident_data: Dict[str, Any], prompts: Dict[str, str], 
+                              prompt_type: str, debug_api: bool = False) -> Dict[str, Any]:
+        """
+        Process incident data to find relevant troubleshooting articles.
+        
+        Args:
+            incident_data: The incident data to analyze
+            prompts: The prompts to use for processing
+            prompt_type: The type of prompt being used
+            debug_api: Whether to enable API debugging
+            
+        Returns:
+            Dictionary containing the search results
+        """
+        if not self.article_searcher:
+            logger.warning("Article searcher not available")
+            return {"error": "Article searcher not initialized"}
+        
+        try:
+            # Format the incident data for search
+            conversation = incident_data.get('conversation', [])
+            summary = incident_data.get('summary', None)
+            formatted_content = self.format_conversation_with_ai_summary(conversation, summary=summary)
+            
+            # Search for relevant articles
+            logger.info("Searching for relevant articles...")
+            search_results = self.article_searcher.search_articles(formatted_content, top_k=5, use_azure_openai=False)
+            logger.info(f"Embedding search returned {len(search_results)} results")
+            
+            if not search_results:
+                # Fallback to TF-IDF search
+                logger.info("No results from embedding search, trying TF-IDF...")
+                search_results = self.article_searcher.search_articles_tfidf(formatted_content, top_k=5)
+                logger.info(f"TF-IDF search returned {len(search_results)} results")
+            
+            # Format search results for display
+            formatted_results = self.article_searcher.format_search_results(
+                search_results, 
+                query=formatted_content, 
+                include_explanations=True
+            )
+            
+            # Create a simple analysis that just presents the articles
+            if search_results:
+                analysis_result = f"Top {len(search_results)} relevant articles found for this incident:\n\n{formatted_results}"
+            else:
+                analysis_result = "No relevant articles found for this incident."
+            
+            # Combine results
+            result = {
+                'search_results': search_results,
+                'formatted_results': formatted_results,
+                'analysis': analysis_result,
+                'incident_data': formatted_content
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in article search processing: {e}")
+            return {"error": str(e)}
+    
+
+    
     def process_multiple_incidents(self, combined_json_path, prompts, prompt_type, debug_api=False):
         """Process multiple incidents from a combined JSON file and generate unified summary."""
         try:
@@ -754,9 +970,6 @@ def load_prompts(prompt_type="default"):
         with open('prompts.json', 'r', encoding='utf-8') as f:
             all_prompts = json.load(f)
         
-        # Get global additional guidelines
-        global_guidelines = all_prompts.get('_additional_guidelines', [])
-        
         if prompt_type not in all_prompts:
             available = [key for key in all_prompts.keys() if not key.startswith('_')]
             error_msg = f"Prompt type '{prompt_type}' not found in prompts.json. Available types: {available}"
@@ -772,21 +985,33 @@ def load_prompts(prompt_type="default"):
         # Get the specific prompt
         prompts = all_prompts[prompt_type]
         
-        # Apply global additional guidelines to system_prompt
-        if global_guidelines and isinstance(global_guidelines, list):
-            guidelines_text = "\n\nAdditional guidelines to follow:\n" + "\n- " + "\n- ".join(global_guidelines)
-            prompts["system_prompt"] = str(prompts["system_prompt"]) + guidelines_text
-            logger.info(f"Applied {len(global_guidelines)} global additional guidelines to '{prompt_type}'")
+        # Load and apply guidelines from AGENTS.md
+        try:
+            with open('AGENTS.md', 'r', encoding='utf-8') as f:
+                agents_content = f.read()
+            
+            # Extract writing guidelines from AGENTS.md
+            writing_guidelines = []
+            
+            # Extract guidelines from the Writing Guidelines section
+            if "## Writing Guidelines" in agents_content:
+                guidelines_section = agents_content.split("## Writing Guidelines")[1].split("## ")[0]
+                
+                # Extract guidelines from each subsection
+                for line in guidelines_section.split('\n'):
+                    line = line.strip()
+                    if line.startswith('- ') and not line.startswith('- Use abbreviated names'):
+                        # Skip the first guideline about abbreviations as it's already handled
+                        writing_guidelines.append(line[2:])  # Remove the "- " prefix
+            
+            # Apply writing guidelines to system prompt
+            if writing_guidelines:
+                guidelines_text = "\n\nCRITICAL WRITING GUIDELINES - MUST FOLLOW:\n" + "\n".join([f"- {guideline}" for guideline in writing_guidelines])
+                prompts["system_prompt"] = guidelines_text + "\n\n" + str(prompts["system_prompt"])
+                logger.info(f"Applied {len(writing_guidelines)} writing guidelines from AGENTS.md to '{prompt_type}'")
         
-        # Also apply any prompt-specific additional_guidelines if they exist (for backward compatibility)
-        if "additional_guidelines" in prompts:
-            specific_guidelines = prompts["additional_guidelines"]
-            if isinstance(specific_guidelines, list):
-                specific_guidelines_text = "\n\nPrompt-specific guidelines to follow:\n" + "\n- " + "\n- ".join(specific_guidelines)
-            else:
-                specific_guidelines_text = f"\n\nPrompt-specific guidelines to follow:\n{specific_guidelines}"
-            prompts["system_prompt"] = str(prompts["system_prompt"]) + specific_guidelines_text
-            logger.info(f"Applied {len(specific_guidelines) if isinstance(specific_guidelines, list) else 1} prompt-specific additional guidelines to '{prompt_type}'")
+        except Exception as e:
+            logger.warning(f"Could not load guidelines from AGENTS.md: {e}")
         
         logger.info(f"Loaded system_prompt for '{prompt_type}': {prompts.get('system_prompt', '')[:120]}{'...' if len(prompts.get('system_prompt', '')) > 120 else ''}")
         logger.info(f"Loaded user_prompt for '{prompt_type}': {prompts.get('user_prompt', '')[:120]}{'...' if len(prompts.get('user_prompt', '')) > 120 else ''}")
@@ -808,10 +1033,12 @@ def main():
     parser.add_argument('--openai', action='store_true', help='Use OpenAI API instead of Azure OpenAI (requires OPENAI_API_KEY)')
     parser.add_argument('--zai', action='store_true', help='Use ZAI API (requires ZAI_API_KEY and ZAI_BASE_URL)')
     parser.add_argument('--azure-5', action='store_true', help='Use Azure OpenAI 5 (GPT-5) - this is now the default')
-    parser.add_argument('--prompt-type', default='default', help='Type of prompt to use (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, etc.)')
+    parser.add_argument('--prompt-type', default='default', help='Type of prompt to use (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, article_search_molecular, etc.)')
     parser.add_argument('--debug', '-d', action='store_true', help='Print the body of the API request sent to the LLM for debugging.')
     parser.add_argument('--multi-incident', action='store_true', help='Process multiple incidents from a combined JSON file')
     parser.add_argument('--no-memory', action='store_true', help='Disable memory integration for this processing session')
+    parser.add_argument('--articles-path', help='Path to directory containing troubleshooting articles (for article search mode)')
+    parser.add_argument('--vector-db-path', help='Path to vector database file (for article search mode)')
     args = parser.parse_args()
 
     try:
@@ -852,9 +1079,16 @@ def main():
                 logger.error('Azure OpenAI 5 configuration is incomplete. Please check your .env file.')
                 raise ValueError('Azure OpenAI 5 configuration is incomplete. Please check your .env file.')
 
-        # Initialize processor with memory support
+        # Initialize processor with memory support and article search if needed
         enable_memory = not args.no_memory
-        processor = IncidentProcessor(use_azure=use_azure, use_zai=use_zai, use_azure_5=use_azure_5, enable_memory=enable_memory)
+        processor = IncidentProcessor(
+            use_azure=use_azure, 
+            use_zai=use_zai, 
+            use_azure_5=use_azure_5, 
+            enable_memory=enable_memory,
+            articles_path=args.articles_path,
+            vector_db_path=args.vector_db_path
+        )
         
         # Log which model is being used
         if processor.use_azure_5:
@@ -885,6 +1119,80 @@ def main():
         conversation = data.get('conversation', [])
         summary = data.get('summary', None)
         formatted_content = processor.format_conversation_with_ai_summary(conversation, summary=summary)
+        
+        # Handle article search mode
+        if args.prompt_type == 'article_search_molecular':
+            if not processor.article_searcher:
+                logger.error("Article search mode requires --articles-path or --vector-db-path")
+                print("Error: Article search mode requires --articles-path or --vector-db-path")
+                return
+            
+            logger.info("Processing in article search mode...")
+            print("🔍 Processing in article search mode...")
+            
+            # Process article search
+            search_result = processor.process_article_search(
+                data, prompts, args.prompt_type, args.debug
+            )
+            
+            if 'error' in search_result:
+                logger.error(f"Article search failed: {search_result['error']}")
+                print(f"Error: {search_result['error']}")
+                return
+            
+            # Save article search results
+            operation_time = datetime.now().isoformat()
+            
+            # Determine model name for logging
+            if processor.use_zai:
+                model_name = config.zai_model_name
+            elif processor.use_azure_5:
+                model_name = processor.deployment_name
+            elif processor.use_azure:
+                model_name = processor.deployment_name
+            else:
+                model_name = config.openai_model_name
+            
+            # Save results
+            incident_number = processor.extract_incident_number(os.path.basename(args.input_file))
+            processor.save_to_json(
+                {"incident_data": data, "search_results": search_result},
+                f"{incident_number}_article_search",
+                ai_summary=search_result['analysis'],
+                prompt_type=args.prompt_type,
+                operation_time=operation_time,
+                model_name=model_name
+            )
+            
+            # Print search results
+            print("\n" + "="*80)
+            print("ARTICLE SEARCH RESULTS")
+            print("="*80)
+            print(search_result['formatted_results'])
+            print("="*80)
+            
+            # Only offer gap analysis for article_search_molecular prompt type
+            if args.prompt_type == 'article_search_molecular':
+                print("\n" + "="*80)
+                print("GAP ANALYSIS OPTION")
+                print("="*80)
+                print("Would you like to perform gap analysis on one of these articles?")
+                print("This will compare your incident against the troubleshooting procedures")
+                print("and identify missing steps that need to be executed.")
+                print("="*80)
+                
+                try:
+                    response = input("\nProceed with gap analysis? (y/n): ").strip().lower()
+                    if response in ['y', 'yes']:
+                        # Run gap analysis inline
+                        run_gap_analysis_inline(incident_number, search_result['search_results'])
+                except (KeyboardInterrupt, EOFError):
+                    print("\nSkipping gap analysis.")
+                except Exception as e:
+                    print(f"\nError during gap analysis: {e}")
+                    print("You can run gap analysis manually with: python3 simple_gap_analysis.py <incident_id>")
+            
+            return
         
         # Generate summary with molecular context enhancement and memory integration
         summary_result = processor.generate_summary(

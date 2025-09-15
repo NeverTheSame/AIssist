@@ -68,7 +68,19 @@ def show_prompt_menu():
                 if 1 <= choice_num <= len(prompt_types):
                     selected_prompt = prompt_types[choice_num - 1]
                     print(f"Selected: {selected_prompt}")
-                    return selected_prompt
+                    
+                    # Automatically set vector database path for article search mode
+                    if selected_prompt == 'article_search_molecular':
+                        from config import config
+                        default_vector_db_path = config.default_vector_db_path
+                        if default_vector_db_path:
+                            print(f"🔍 Article search mode detected - automatically using vector database: {default_vector_db_path}")
+                            return selected_prompt, default_vector_db_path
+                        else:
+                            print("⚠️ Article search mode detected but DEFAULT_VECTOR_DB_PATH not set in .env file")
+                            return selected_prompt, None
+                    
+                    return selected_prompt, None
                 else:
                     print(f"Invalid choice. Please enter a number between 1 and {len(prompt_types)}")
             except ValueError:
@@ -293,6 +305,8 @@ def main():
     parser.add_argument("--zai", action="store_true", help="Use ZAI")
     parser.add_argument("--debug", "-d", action="store_true", help="Enable API debugging")
     parser.add_argument("--troubleshooting-plan", action="store_true", help="Generate troubleshooting plan mode - first incident is primary, others are historical references")
+    parser.add_argument("--articles-path", help="Path to directory containing troubleshooting articles (for article search mode)")
+    parser.add_argument("--vector-db-path", help="Path to vector database file (for article search mode)")
     
     args = parser.parse_args(processed_args)
     
@@ -303,6 +317,8 @@ def main():
     use_zai = args.zai
     debug_api = args.debug
     troubleshooting_plan_mode = args.troubleshooting_plan
+    articles_path = args.articles_path
+    vector_db_path = args.vector_db_path
     
     # Set default behavior: if no specific model is specified, use Azure OpenAI 5
     if not use_azure and not use_azure_5 and not use_zai:
@@ -316,6 +332,8 @@ def main():
     logger.info(f"  Use ZAI: {use_zai}")
     logger.info(f"  Debug API: {debug_api}")
     logger.info(f"  Troubleshooting plan mode: {troubleshooting_plan_mode}")
+    logger.info(f"  Articles path: {articles_path}")
+    logger.info(f"  Vector DB path: {vector_db_path}")
 
     print(f"Processing {len(incident_numbers)} incident(s): {', '.join(incident_numbers)}")
 
@@ -348,7 +366,11 @@ def main():
         # If no prompt type specified, show interactive menu
         if prompt_type is None:
             logger.info("No prompt type specified, showing interactive menu")
-            prompt_type = show_prompt_menu()
+            prompt_type, auto_vector_db_path = show_prompt_menu()
+            # Use the automatically detected vector database path if available
+            if auto_vector_db_path and not vector_db_path:
+                vector_db_path = auto_vector_db_path
+                logger.info(f"Auto-detected vector database path: {vector_db_path}")
         else:
             logger.info(f"Using specified prompt type: {prompt_type}")
 
@@ -438,6 +460,12 @@ def main():
         ai_cmd = [
             sys.executable, "processor.py", json_path, "--prompt-type", prompt_type
         ]
+    
+    # Add article search parameters if provided
+    if articles_path:
+        ai_cmd.extend(["--articles-path", articles_path])
+    if vector_db_path:
+        ai_cmd.extend(["--vector-db-path", vector_db_path])
     
     # Add model-specific arguments
     if use_azure:

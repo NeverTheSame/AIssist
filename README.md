@@ -1,45 +1,188 @@
-# Summarizer
+# AI-Powered Incident Summarizer
 
 ## Overview
 
-This tool automates the process of fetching incident data from Azure Data Explorer (Kusto), processes it, and generates summaries using Azure OpenAI by default. It supports persistent Azure authentication, so you only need to authenticate once per token lifetime.
+The AI-Powered Incident Summarizer is an advanced tool designed to automate the analysis and summarization of technical support incidents. It streamlines the incident management workflow by fetching data from databases (Azure Data Explorer/Kusto), processing it through intelligent AI models, and generating comprehensive summaries, troubleshooting guides, and actionable insights.
+
+This tool is built for support teams to handle technical incidents more efficiently, providing consistent, high-quality summaries and reducing manual analysis time.
+
+## What This Project Does
+
+### Core Functionality
+- **Automated Incident Analysis**: Fetches incident data from databases and processes it through AI models
+- **Intelligent Summarization**: Generates various types of summaries including escalation notes, mitigation reports, and troubleshooting guides
+- **Context-Aware Processing**: Uses molecular context engineering and memory systems to provide more relevant and consistent analysis
+- **Article Search Integration**: Finds relevant troubleshooting articles and performs gap analysis against incident data
+- **Multi-Incident Support**: Processes single incidents or combines multiple related incidents for unified analysis
+
+### Key Features
+- **Persistent Authentication**: Caches Azure authentication tokens to avoid repeated logins
+- **Screenshot Processing**: Automatically downloads and processes embedded screenshots from incident data
+- **Memory Integration**: Uses mem0 for persistent memory across sessions, learning from previous incidents
+- **Molecular Context**: Dynamically selects relevant examples to enhance prompt quality
+- **Gap Analysis**: Compares incident troubleshooting against knowledge base articles to identify missing steps
+- **Multiple AI Providers**: Supports Azure OpenAI (GPT-4/GPT-5), OpenAI, and ZAI models
 
 ## Architecture
 
-The tool follows a three-stage pipeline:
+The tool follows a sophisticated three-stage pipeline with advanced AI integration:
 
-1. **Data Fetching** (`kusto_fetcher.py`): Fetches raw incident data from Azure Kusto and saves it as CSV files in incident-specific folders
-2. **Data Processing** (`transformer.py`): Transforms the raw CSV data into structured JSON format optimized for LLM processing
-3. **AI Analysis** (`processor.py`): Uses LLMs to generate insights, summaries, and recommendations from the processed data
+### Stage 1: Data Fetching (`kusto_fetcher.py`)
+- **Purpose**: Retrieves raw incident data from Azure Data Explorer (Kusto)
+- **Features**: 
+  - Persistent token caching for seamless authentication
+  - Screenshot extraction and processing from embedded data URLs
+  - Incident-specific folder organization
+  - Network error handling with VPN connection guidance
+- **Output**: CSV files with incident discussions and authored summaries
 
-## Features
-- **Automatic CSV Fetching**: Provide incident number(s), and the tool fetches the relevant data from Azure Kusto.
-- **Screenshot Extraction**: Automatically downloads and saves embedded screenshots from incident data.
-- **Multi-Incident Support**: Process multiple incidents simultaneously and generate unified summaries.
-- **Persistent Azure Authentication**: Auth token is cached locally and reused until it expires (no repeated browser logins).
-- **Default Azure OpenAI Usage**: Summarization and processing use Azure OpenAI by default.
-- **Interactive Prompt Selection**: When no prompt type is specified, the tool presents an interactive menu of available molecular prompt types.
-- **Flexible Argument Passing**: Pass summarization and prompt options directly from the command line.
-- **Dynamic Molecular Context**: Prompts can be dynamically enhanced with relevant incident examples from a configurable file (`molecular_examples.json`).
-- **Memory Integration**: Uses [mem0](https://github.com/mem0ai/mem0) for persistent memory across processing sessions, providing context-aware analysis based on previous incidents.
+### Stage 2: Data Processing (`transformer.py`)
+- **Purpose**: Transforms raw CSV data into structured JSON format optimized for AI processing
+- **Features**:
+  - HTML content cleaning and sanitization
+  - Screenshot reference replacement
+  - Data filtering and noise removal
+  - Multi-section CSV parsing
+- **Output**: Clean JSON files ready for AI analysis
+
+### Stage 3: AI Analysis (`processor.py`)
+- **Purpose**: Generates intelligent summaries and insights using advanced AI models
+- **Features**:
+  - Molecular context engineering for enhanced prompts
+  - Memory integration for learning from previous incidents
+  - Article search and gap analysis capabilities
+  - Multiple prompt types for different use cases
+  - Cost tracking and token management
+- **Output**: Comprehensive summaries, troubleshooting guides, and actionable insights
+
+## Technologies Used
+
+### Core Technologies
+- **Python 3.12**: Primary programming language with virtual environment support
+- **Azure Data Explorer (Kusto)**: Data source for incident information
+- **Azure OpenAI**: Primary AI service for text generation and embeddings
+- **OpenAI API**: Alternative AI provider for text generation
+- **ZAI API**: Additional AI provider option
+
+### AI and Machine Learning
+- **mem0**: Universal memory layer for AI agents providing persistent context
+- **Azure OpenAI Embeddings**: BAAI/bge-large-en-v1.5 model for semantic search
+- **TF-IDF Vectorization**: Fallback text similarity matching
+- **Cosine Similarity**: Text matching algorithms for article search
+
+### Data Processing
+- **Pandas**: Data manipulation and CSV processing
+- **BeautifulSoup4**: HTML content cleaning and parsing
+- **NumPy**: Numerical operations for embeddings
+- **scikit-learn**: Machine learning utilities for text processing
+
+### Azure Services
+- **Azure Identity**: Interactive browser authentication
+- **Azure Kusto Data**: Database connectivity and query execution
+- **Azure Cognitive Services**: Vision API for image processing
+
+### Additional Libraries
+- **tiktoken**: Token counting for cost estimation
+- **python-docx**: Document processing capabilities
+- **Pillow**: Image processing and manipulation
+- **tqdm**: Progress bars for long-running operations
+- **requests**: HTTP client for API calls
+
+## Key Features
+
+### Data Management
+- **Automatic CSV Fetching**: Retrieves incident data from databases with persistent authentication
+- **Screenshot Processing**: Downloads and processes embedded screenshots from incident data
+- **Multi-Incident Support**: Handles single incidents or combines multiple related incidents
+- **Data Sanitization**: Cleans HTML content and removes sensitive information
+
+### AI-Powered Analysis
+- **Intelligent Summarization**: Generates various types of summaries (escalation, mitigation, troubleshooting)
+- **Molecular Context Engineering**: Dynamically enhances prompts with relevant examples
+- **Memory Integration**: Learns from previous incidents to provide better context
+- **Article Search**: Finds relevant troubleshooting articles using semantic search
+- **Gap Analysis**: Identifies missing troubleshooting steps by comparing against knowledge base
+
+### User Experience
+- **Interactive Prompt Selection**: Presents menu of available prompt types
+- **Flexible Configuration**: Supports multiple AI providers and custom settings
+- **Cost Tracking**: Monitors token usage and API costs
+- **Comprehensive Logging**: Detailed logs for debugging and monitoring
+
+## How It Works
+
+### Complete Workflow
+1. **Incident Data Retrieval**: Fetches incident data from databases using KQL queries
+2. **Data Processing**: Converts raw CSV data to structured JSON format
+3. **AI Analysis**: Processes data through AI models with context enhancement
+4. **Memory Storage**: Stores results for future context and learning
+5. **Output Generation**: Creates summaries, troubleshooting guides, and insights
+
+### Molecular Context Engineering
+The system uses a sophisticated molecular context engine that:
+- Extracts technical keywords from incident data
+- Matches against a database of curated examples
+- Dynamically enhances prompts with relevant context
+- Improves consistency and quality of AI responses
+
+### Memory System
+- **Persistent Learning**: Stores processed incidents for future reference
+- **Semantic Search**: Finds relevant previous incidents using vector embeddings
+- **Context Enhancement**: Automatically adds relevant historical context to prompts
+- **Cross-Session Persistence**: Memory survives across different processing sessions
 
 ## Setup
+
+### Prerequisites
+- Python 3.12 or higher
+- Azure account with access to databases and AI services
+- VPN connection for accessing internal resources (if required)
+
+### Installation
 
 1. **Clone the repository and set up your Python environment**
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+git clone <repository-url>
+cd Summarizer
+python3 -m venv venv_py312
+source venv_py312/bin/activate
 pip install -r requirements.txt
 ```
 
-2. **Configure Azure OpenAI and Kusto access**
-- Ensure your Azure credentials are set up for browser-based authentication.
-- Create your KQL query template in `query.kql` (see Configuration section below).
-- Set up your Azure OpenAI environment variables in `.env` as needed for summarization.
+2. **Configure Azure services**
+- Set up Azure credentials for browser-based authentication
+- Configure your KQL query template in `query.kql`
+- Set up environment variables in `.env` file (see Configuration section)
 
 3. **First-time authentication**
-- The first time you run the tool, you'll be prompted to authenticate with Azure in your browser. The token will be cached for future runs.
+- Run the tool once to authenticate with Azure
+- Authentication tokens are cached for future use
+
+## Prompt Types and Use Cases
+
+The system supports various prompt types for different analysis needs:
+
+### Molecular Prompt Types (Recommended)
+- **`escalation_molecular`**: Creates escalation summaries with dynamic examples
+- **`mitigation_molecular`**: Generates mitigation reports with contextual guidance
+- **`troubleshooting_molecular`**: Produces detailed troubleshooting guides
+- **`article_search_molecular`**: Finds relevant troubleshooting articles
+- **`troubleshooting_plan_molecular`**: Creates comprehensive troubleshooting plans
+- **`wait_time_molecular`**: Analyzes incident wait times by team
+- **`prev_act_molecular`**: Recommends preventative actions
+- **`weekly_insights_molecular`**: Generates weekly status updates
+
+### Standard Prompt Types
+- **`escalation_plain`**: Basic escalation summaries
+- **`technical_article_plain`**: Technical documentation generation
+- **`sentiment_analysis_plain`**: Customer sentiment analysis
+- **`human_style_rewriting_plain`**: Human-like text rewriting
+
+### Specialized Analysis
+- **`troubleshooting_gap_analysis`**: Compares incident steps against knowledge base
+- **`care_incident_facilitation`**: CARE team facilitation summaries
+- **`icm_delay_analysis`**: Identifies reasons for incident delays
 
 ## Configuration
 
@@ -57,7 +200,7 @@ cluster('your-cluster.kusto.windows.net').database('YourDatabase').table('Incide
 | project Date, ChangedBy, Text
 
 cluster('your-cluster.kusto.windows.net').database('YourDatabase').table('AISummary') 
-| where ICM_IncidentId in ("{incident_number}")
+| where IncidentId in ("{incident_number}")
 ```
 
 #### 2. Prompt Templates (`prompts.json`)
@@ -78,7 +221,7 @@ Create a `prompts.json` file with your prompt templates for different summarizat
     "system_prompt": "You are an expert at preparing technical incident escalations. Your role is to create clear, concise, and technically accurate summaries of unresolved incidents to hand off to engineering or specialized teams.",
     "user_prompt": "Summarize this incident for escalation to another team using exactly four paragraphs: 1) a short issue description, 2) relevant details including environmental context, 3) troubleshooting steps already taken, and 4) the customer's current goal or what support is needed to proceed.\n\nHere are examples of well-structured escalation summaries:\n\n[Examples will be dynamically injected from molecular_examples.json]",
     "additional_guidelines": [
-      "Use abbreviated names, e.g. MDE, AV, PUA, etc.",
+      "Use abbreviated names, e.g. AV, PUA, etc.",
       "Do not start with 'The issue involves' or 'The incident involves'. This is implicit.",
       "Do not say 'The environment involves' or 'The environment consists of'. This is implicit."
     ]
@@ -183,20 +326,54 @@ ZAI_MODEL_NAME=glm-4.5-air
 ### Basic Command
 
 ```bash
-python main.py <incident_number> [options]
+python3 main.py <incident_number> [options]
 ```
 
 ### Multi-Incident Command
 
 ```bash
-python main.py <incident_number1> <incident_number2> ... [options]
+python3 main.py <incident_number1> <incident_number2> ... [options]
 ```
 
+### Article Search and Gap Analysis
+
+The tool includes advanced article search functionality and gap analysis capabilities:
+
+```bash
+# Search for relevant troubleshooting articles
+python3 main.py <incident_number> --prompt-type article_search_molecular --vector-db-path article_vector_db.json
+
+# Search using text files directly
+python3 main.py <incident_number> --prompt-type article_search_molecular --articles-path /path/to/articles
+
+# Setup article search from text files
+python3 setup_article_search.py --setup /path/to/articles --output article_vector_db.json --azure-5
+
+# Test article search functionality
+python3 setup_article_search.py --test article_vector_db.json --query "agent crashes" --azure-5
+
+# Run gap analysis after article search
+python3 gap_analysis.py <incident_number>
+python3 simple_gap_analysis.py <incident_number>
+```
+
+### Gap Analysis Feature
+
+The gap analysis feature compares incident troubleshooting steps against comprehensive knowledge base articles to identify missing steps:
+
+- **Intelligent Comparison**: Analyzes what troubleshooting has been done vs. what should be done
+- **Prioritized Action Plan**: Creates high/medium/low priority execution plans
+- **Real Content Retrieval**: Accesses actual troubleshooting content from local knowledge base directory
+- **Azure OpenAI Integration**: Uses Azure OpenAI for intelligent analysis and gap identification
+- **Execution Plans**: Generates specific commands and expected outcomes
+
 ### Options
-- `--prompt-type TYPE`   Type of prompt (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, etc.)
+- `--prompt-type TYPE`   Type of prompt (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, article_search_molecular, etc.)
 - `--azure`              Explicitly use Azure OpenAI (default behavior)
 - `--zai`                Use ZAI instead of Azure OpenAI
 - `--debug_api`          Enable API debugging
+- `--articles-path PATH` Path to directory containing troubleshooting articles (for article search mode)
+- `--vector-db-path PATH` Path to vector database file (for article search mode)
 - `--summ`               Include summary from summary.txt
 - `--summ-docx`          Use summary.docx as input
 - `--troubleshooting-plan` Generate troubleshooting plan mode (first incident is primary, others are historical references)
@@ -347,10 +524,11 @@ The summarizer uses Qdrant as its vector database, which provides several key be
 - **No Data Loss**: Memory survives project deletion/recreation
 
 #### Technical Details
-- **Embedding Model**: Azure OpenAI text-embedding-ada-002 (1536 dimensions)
+- **Embedding Model**: BAAI/bge-large-en-v1.5 (1536 dimensions)
 - **Distance Metric**: Cosine similarity for semantic matching
 - **Storage Type**: File-based persistent storage (not in-memory)
 - **Collection**: Single collection named "mem0" for all memories
+- **Dimension Consistency**: All embeddings standardized to 1536 dimensions for optimal performance
 
 ### Using Memory
 
@@ -544,6 +722,62 @@ memory/                          # Memory storage (git-ignored)
 - For screenshot download issues, ensure the incident data contains valid data URLs and the output directories are writable.
 - **Memory Issues**: If memory isn't working, check that `memory_config.json` exists and `enabled` is set to `true`, or verify that the `--no-memory` flag is not being used.
 - **Vector Database Issues**: If you see "Using file-based memory system" instead of mem0, ensure `AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME` is set in your `.env` file. The vector database is stored in `~/.mem0/` and persists across sessions.
+- **Embedding Consistency**: The system uses BAAI/bge-large-en-v1.5 consistently for all embeddings, ensuring 1536 dimensions throughout. No dimension mismatches should occur.
+- **Article Search Issues**: If article search fails with float() errors, the system properly handles various embedding formats and converts them to the correct data types. Invalid embeddings are replaced with zero vectors.
+- **Vector Database Loading**: The system supports multiple vector database formats including nested embeddings structures. All embeddings are automatically standardized to 1536 dimensions.
+
+## Project Structure
+
+```
+Summarizer/
+├── main.py                     # Main entry point and orchestration
+├── processor.py                # AI processing and summarization engine
+├── transformer.py              # Data transformation and cleaning
+├── kusto_fetcher.py           # Azure Kusto data fetching
+├── memory_manager.py          # Memory integration with mem0
+├── article_searcher.py        # Article search and vector operations
+├── gap_analysis.py            # Advanced gap analysis functionality
+├── simple_gap_analysis.py     # Simplified gap analysis tool
+├── config.py                  # Configuration management
+├── prompts.json               # AI prompt templates
+├── molecular_examples.json    # Dynamic context examples
+├── technical_patterns.json    # Keyword extraction patterns
+├── query.kql                  # Kusto query template
+├── requirements.txt           # Python dependencies
+├── AGENTS.md                  # Agent guidelines and rules
+├── icms/                      # Raw incident data (CSV files)
+├── processed_incidents/       # Processed JSON data
+├── summaries/                 # Generated summaries
+├── memory/                    # Memory storage files
+└── logs/                      # Application logs
+```
+
+## Recent Improvements
+
+### Gap Analysis Feature (Latest)
+- **Intelligent Gap Analysis**: Compares incident data against troubleshooting articles to identify missing steps
+- **Real Content Retrieval**: Accesses actual troubleshooting content from local knowledge base directory
+- **Azure OpenAI Integration**: Uses Azure OpenAI for intelligent analysis and gap identification
+- **Execution Plans**: Generates prioritized action plans with specific commands and expected outcomes
+- **Standalone Scripts**: Independent gap analysis tools (`gap_analysis.py`, `simple_gap_analysis.py`)
+
+### Enhanced Article Search
+- **Real Content Access**: Retrieves actual troubleshooting guide content
+- **Content Summaries**: Stores meaningful content summaries for fast relevance matching
+- **Full Content Paths**: Maintains paths to complete articles for detailed analysis
+- **Improved Relevance**: Better semantic search using real content
+
+### Azure OpenAI Integration
+- **Response Handling**: Fixed compatibility issues with newer OpenAI client versions
+- **Error Handling**: Robust error handling for different API response structures
+- **Direct Integration**: Both gap analysis and main workflow use Azure OpenAI directly
+- **Proper Authentication**: Uses Azure OpenAI credentials from `.env` file
+
+### Code Quality Improvements
+- **Comprehensive Logging**: Detailed logging system with file and console output
+- **Error Handling**: Improved error handling throughout the system
+- **Documentation**: Updated README with comprehensive project overview
+- **Code Structure**: Cleaner, more maintainable code structure
 
 ## License
 MIT
