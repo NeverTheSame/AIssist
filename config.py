@@ -44,97 +44,50 @@ class Config:
     
     def _init_config(self):
         """Initialize configuration from environment variables."""
-        # Azure OpenAI Configuration
-        self.azure_openai_api_key = os.environ.get('AZURE_OPENAI_API_KEY')
-        self.azure_openai_endpoint = os.environ.get('AZURE_OPENAI_ENDPOINT')
-        self.azure_openai_api_version = os.environ.get('AZURE_OPENAI_API_VERSION')
-        self.azure_openai_deployment_name = os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME')
-        self.azure_openai_embedding_deployment_name = os.environ.get('AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME')
+        # AI Service Configuration (Primary)
+        self.ai_service_api_key = os.environ.get('AI_SERVICE_API_KEY')
+        self.ai_service_endpoint = os.environ.get('AI_SERVICE_ENDPOINT')
+        self.ai_service_model_name = os.environ.get('AI_SERVICE_MODEL_NAME')
+        self.ai_service_deployment_name = os.environ.get('AI_SERVICE_DEPLOYMENT_NAME')
+        self.ai_service_api_version = os.environ.get('AI_SERVICE_API_VERSION')
         
-        # Azure OpenAI 5 Configuration
-        self.azure_openai_5_api_key = os.environ.get('AZURE_OPENAI_5_API_KEY')
-        self.azure_openai_5_endpoint = os.environ.get('AZURE_OPENAI_5_ENDPOINT')
-        self.azure_openai_5_api_version = os.environ.get('AZURE_OPENAI_5_API_VERSION')
-        self.azure_openai_5_deployment_name = os.environ.get('AZURE_OPENAI_5_DEPLOYMENT_NAME')
+        # Database Configuration
+        self.database_cluster = os.environ.get('DATABASE_CLUSTER', 'https://your-cluster.kusto.windows.net')
+        self.database_name = os.environ.get('DATABASE_NAME', 'YourDatabase')
+        self.database_token_scope = os.environ.get('DATABASE_TOKEN_SCOPE', 'https://your-cluster.kusto.windows.net/.default')
         
-        # Azure Kusto Configuration
-        self.azure_kusto_cluster = os.environ.get('AZURE_KUSTO_CLUSTER', 'https://your-cluster.kusto.windows.net')
-        self.azure_kusto_database = os.environ.get('AZURE_KUSTO_DATABASE', 'YourDatabase')
-        self.azure_kusto_token_scope = os.environ.get('AZURE_KUSTO_TOKEN_SCOPE', 'https://your-cluster.kusto.windows.net/.default')
+        # Cost Configuration (for AI service)
+        self.input_cost = float(os.environ.get('AI_SERVICE_INPUT_COST', '0.01'))  # Cost per 1K input tokens
+        self.output_cost = float(os.environ.get('AI_SERVICE_OUTPUT_COST', '0.03'))  # Cost per 1K output tokens
         
-        # OpenAI Configuration
-        self.openai_api_key = os.environ.get('OPENAI_API_KEY')
-        
-        # ZAI Configuration
-        self.zai_api_key = os.environ.get('ZAI_API_KEY')
-        self.zai_base_url = os.environ.get('ZAI_BASE_URL')
-        self.zai_model_name = os.environ.get('ZAI_MODEL_NAME', 'glm-4.5-air')
-        self.zai_input_cost = float(os.environ.get('ZAI_FLASH_INPUT_COST', '0.2'))  # Cost per 1M input tokens
-        self.zai_output_cost = float(os.environ.get('ZAI_FLASH_OUTPUT_COST', '1.1'))  # Cost per 1M output tokens
-        
-        # OpenAI Configuration
-        self.openai_model_name = os.environ.get('OPENAI_MODEL_NAME', 'gpt-5-mini')
-        self.openai_input_cost = float(os.environ.get('OPENAI_INPUT_COST', '0.01'))  # Cost per 1K input tokens
-        self.openai_output_cost = float(os.environ.get('OPENAI_OUTPUT_COST', '0.03'))  # Cost per 1K output tokens
-        
-        # Azure Vision Configuration
-        self.azure_vision_key = os.environ.get('AZURE_OPENAI_API_KEY')
-        self.azure_vision_endpoint = os.environ.get('AZURE_VISION_ENDPOINT')
+        # Vision Service Configuration
+        self.vision_api_key = os.environ.get('VISION_API_KEY')
+        self.vision_endpoint = os.environ.get('VISION_ENDPOINT')
         
         # Article Search Configuration
-        self.default_vector_db_path = os.environ.get('DEFAULT_VECTOR_DB_PATH')
+        self.default_vector_db_path = os.environ.get('DEFAULT_ARTICLES_EMBEDDINGS_PATH')
         
         # Validate required configurations
         self._validate_config()
     
     def _validate_config(self):
         """Validate that required configuration is present."""
-        # Check Azure OpenAI configuration
-        azure_config = {
-            'AZURE_OPENAI_API_KEY': self.azure_openai_api_key,
-            'AZURE_OPENAI_ENDPOINT': self.azure_openai_endpoint,
-            'AZURE_OPENAI_API_VERSION': self.azure_openai_api_version,
-            'AZURE_OPENAI_DEPLOYMENT_NAME': self.azure_openai_deployment_name
+        # Check AI Service configuration (required)
+        ai_service_config = {
+            'AI_SERVICE_API_KEY': self.ai_service_api_key,
+            'AI_SERVICE_ENDPOINT': self.ai_service_endpoint,
+            'AI_SERVICE_API_VERSION': self.ai_service_api_version,
+            'AI_SERVICE_DEPLOYMENT_NAME': self.ai_service_deployment_name,
+            'AI_SERVICE_MODEL_NAME': self.ai_service_model_name
         }
         
-        # Check Azure OpenAI 5 configuration
-        azure_5_config = {
-            'AZURE_OPENAI_5_API_KEY': self.azure_openai_5_api_key,
-            'AZURE_OPENAI_5_ENDPOINT': self.azure_openai_5_endpoint,
-            'AZURE_OPENAI_5_API_VERSION': self.azure_openai_5_api_version,
-            'AZURE_OPENAI_5_DEPLOYMENT_NAME': self.azure_openai_5_deployment_name
-        }
+        # Validate that AI Service configuration is complete
+        ai_service_complete = all(ai_service_config.values())
         
-        # Check OpenAI configuration
-        openai_config = {
-            'OPENAI_API_KEY': self.openai_api_key
-        }
-        
-        # Check ZAI configuration
-        zai_config = {
-            'ZAI_API_KEY': self.zai_api_key,
-            'ZAI_BASE_URL': self.zai_base_url
-        }
-        
-        # Validate that at least one of the configurations is complete
-        azure_complete = all(azure_config.values())
-        azure_5_complete = all(azure_5_config.values())
-        openai_complete = all(openai_config.values())
-        zai_complete = all(zai_config.values())
-        
-        if not (azure_complete or azure_5_complete or openai_complete or zai_complete):
-            missing_vars = []
-            if not azure_complete:
-                missing_vars.extend([k for k, v in azure_config.items() if not v])
-            if not azure_5_complete:
-                missing_vars.extend([k for k, v in azure_5_config.items() if not v])
-            if not openai_complete:
-                missing_vars.extend([k for k, v in openai_config.items() if not v])
-            if not zai_complete:
-                missing_vars.extend([k for k, v in zai_config.items() if not v])
-            
+        if not ai_service_complete:
+            missing_vars = [k for k, v in ai_service_config.items() if not v]
             raise ValueError(
-                f"Missing required environment variables: {', '.join(missing_vars)}. "
+                f"Missing required AI Service environment variables: {', '.join(missing_vars)}. "
                 "Please check your .env file configuration."
             )
 

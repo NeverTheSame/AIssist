@@ -1,4 +1,5 @@
 import os
+import sys
 import csv
 import time
 import json
@@ -55,7 +56,7 @@ def _get_valid_token():
     credential = InteractiveBrowserCredential()
     
     # Get token scope from config
-    token_scope = config.azure_kusto_token_scope
+    token_scope = config.database_token_scope
     token_response = credential.get_token(token_scope)
     token = token_response.token
     expires_at = token_response.expires_on
@@ -221,8 +222,8 @@ def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms")
         str: Path to the saved CSV file.
     """
     # Get cluster and database from config
-    cluster = config.azure_kusto_cluster
-    database = config.azure_kusto_database
+    cluster = config.database_cluster
+    database = config.database_name
     
     # Get valid token (cached if not expired)
     token = _get_valid_token()
@@ -338,7 +339,7 @@ def main():
             logf.write(f"{datetime.now().isoformat()} - {concise_msg}\n")
             logf.write(traceback.format_exc())
             logf.write("\n")
-        return
+        sys.exit(1)  # Exit with error code to indicate failure
     except Exception as e:
         concise_msg = f"[kusto_fetcher] Error: {e}"
         print(concise_msg)
@@ -348,7 +349,7 @@ def main():
             logf.write(f"{datetime.now().isoformat()} - {concise_msg}\n")
             logf.write(traceback.format_exc())
             logf.write("\n")
-        return
+        sys.exit(1)  # Exit with error code to indicate failure
 
 if __name__ == "__main__":
     print("[kusto_fetcher] __main__ entrypoint")

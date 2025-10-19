@@ -19,6 +19,11 @@ technical_patterns.json
 test-*.py
 /memory
 /examples
+/team_knowledge
 .cursorindexingignore
 .specstory/
 AGENTS.md
+.cursor/
+Documentation/
+MCP-Proxy/
+vip_incidents/

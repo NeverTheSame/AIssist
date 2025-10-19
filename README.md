@@ -21,7 +21,7 @@ This tool is built for support teams to handle technical incidents more efficien
 - **Memory Integration**: Uses mem0 for persistent memory across sessions, learning from previous incidents
 - **Molecular Context**: Dynamically selects relevant examples to enhance prompt quality
 - **Gap Analysis**: Compares incident troubleshooting against knowledge base articles to identify missing steps
-- **Multiple AI Providers**: Supports Azure OpenAI (GPT-4/GPT-5), OpenAI, and ZAI models
+- **Azure Router Integration**: Uses Azure Router with GPT-5 for all AI operations
 
 ## Architecture
 
@@ -60,13 +60,11 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 ### Core Technologies
 - **Python 3.12**: Primary programming language with virtual environment support
 - **Azure Data Explorer (Kusto)**: Data source for incident information
-- **Azure OpenAI**: Primary AI service for text generation and embeddings
-- **OpenAI API**: Alternative AI provider for text generation
-- **ZAI API**: Additional AI provider option
+- **Azure Router**: Primary AI service for text generation and embeddings (GPT-5)
 
 ### AI and Machine Learning
 - **mem0**: Universal memory layer for AI agents providing persistent context
-- **Azure OpenAI Embeddings**: BAAI/bge-large-en-v1.5 model for semantic search
+- **Local Embeddings**: all-MiniLM-L6-v2 model for consistent semantic search
 - **TF-IDF Vectorization**: Fallback text similarity matching
 - **Cosine Similarity**: Text matching algorithms for article search
 
@@ -145,8 +143,8 @@ The system uses a sophisticated molecular context engine that:
 ```bash
 git clone <repository-url>
 cd Summarizer
-python3 -m venv venv_py312
-source venv_py312/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -293,12 +291,13 @@ Create a `technical_patterns.json` file to customize keyword extraction for inci
 
 Create a `.env` file with the following variables:
 
-**Azure OpenAI (Default):**
+**Azure Router (Required):**
 ```
-AZURE_OPENAI_API_KEY=your_api_key
-AZURE_OPENAI_ENDPOINT=your_endpoint
-AZURE_OPENAI_API_VERSION=2024-02-15-preview
-AZURE_OPENAI_DEPLOYMENT_NAME=your_deployment_name
+AZURE_ROUTER_API_KEY=your_api_key
+AZURE_ROUTER_ENDPOINT=your_endpoint
+AZURE_ROUTER_API_VERSION=2024-02-15-preview
+AZURE_ROUTER_DEPLOYMENT_NAME=your_deployment_name
+AZURE_ROUTER_MODEL_NAME=gpt-5
 ```
 
 **Azure Kusto (Required for data fetching):**
@@ -308,20 +307,9 @@ AZURE_KUSTO_DATABASE=YourDatabase
 AZURE_KUSTO_TOKEN_SCOPE=https://your-cluster.kusto.windows.net/.default
 ```
 
-**OpenAI (Alternative):**
-```
-OPENAI_API_KEY=your_api_key
-OPENAI_MODEL_NAME=gpt-4-turbo-preview
-```
+## How to Run
 
-**ZAI (Alternative):**
-```
-ZAI_API_KEY=your_api_key
-ZAI_BASE_URL=your_base_url
-ZAI_MODEL_NAME=glm-4.5-air
-```
-
-## Usage
+The main entry point for the application is `main.py`. Here are the primary ways to run the application:
 
 ### Basic Command
 
@@ -329,13 +317,106 @@ ZAI_MODEL_NAME=glm-4.5-air
 python3 main.py <incident_number> [options]
 ```
 
-### Multi-Incident Command
+### Complete Workflow (Recommended)
+The `main.py` script handles the entire pipeline automatically:
+
+Fetch, process, and summarize an incident with interactive prompt selection:
+```bash
+python main.py 654045297
+```
+
+Fetch, process, and summarize an incident with specific escalation prompt:
+```bash
+python main.py 654045297 --prompt-type escalation_molecular
+```
+
+All operations use Azure Router (GPT-5) by default.
+
+Process multiple incidents with unified summarization:
+```bash
+python main.py 654045297 654045298 654045299 --prompt-type escalation_molecular
+```
+
+Generate troubleshooting plan based on historical incidents:
+```bash
+python main.py 654045297 654045298 654045299 654045300 --troubleshooting-plan
+```
+
+## How to Test
+
+### Testing the Application
+
+**Note:** This project currently doesn't include a `test_main.py` file or automated unit tests. Testing is done through manual execution with sample incident data:
+
+#### 1. Test with Sample Incident
+```bash
+# Test with a known incident number
+python3 main.py 692076095 --prompt-type escalation_molecular
+```
+
+#### 2. Test Different Prompt Types
+```bash
+# Test escalation summaries
+python3 main.py 692076095 --prompt-type escalation_molecular
+
+# Test mitigation reports  
+python3 main.py 692076095 --prompt-type mitigation_molecular
+
+# Test troubleshooting guides
+python3 main.py 692076095 --prompt-type troubleshooting_molecular
+```
+
+#### 3. Test Article Search Functionality
+```bash
+# Test article search mode (requires vector database)
+python3 main.py 692076095 --prompt-type article_search_molecular
+```
+
+#### 4. Test Memory Integration
+```bash
+# Process multiple incidents to test memory learning
+python3 main.py 692076095
+python3 main.py 692076095  # Second run should use memory context
+```
+
+#### 5. Test Different Prompt Types
+```bash
+# Test different prompt types
+python3 main.py 692076095 --prompt-type escalation_molecular
+python3 main.py 692076095 --prompt-type mitigation_molecular
+```
+
+### Validation Steps
+
+1. **Check Output Files**: Verify that summaries are generated in the `summaries/` directory
+2. **Review Logs**: Check `logs/summarizer.log` for any errors or warnings
+3. **Memory Verification**: Confirm memory storage in `memory/` directory
+4. **Cost Tracking**: Monitor token usage and costs in the output
+
+### Troubleshooting Tests
+
+If you encounter issues, test these scenarios:
+
+```bash
+# Test with debug mode for detailed output
+python3 main.py 692076095 --debug
+
+# Test with timing analysis
+python3 main.py 692076095 --timing
+
+# All operations use Azure Router (GPT-5)
+python3 main.py 692076095
+```
+
+### Advanced Usage
+
+#### Multi-Incident Command
 
 ```bash
 python3 main.py <incident_number1> <incident_number2> ... [options]
 ```
 
-### Article Search and Gap Analysis
+#### Article Search and Gap Analysis
 
 The tool includes advanced article search functionality and gap analysis capabilities:
 
@@ -347,17 +428,17 @@ python3 main.py <incident_number> --prompt-type article_search_molecular --vecto
 python3 main.py <incident_number> --prompt-type article_search_molecular --articles-path /path/to/articles
 
 # Setup article search from text files
-python3 setup_article_search.py --setup /path/to/articles --output article_vector_db.json --azure-5
+python3 setup_article_search.py --setup /path/to/articles --output article_vector_db.json
 
 # Test article search functionality
-python3 setup_article_search.py --test article_vector_db.json --query "agent crashes" --azure-5
+python3 setup_article_search.py --test article_vector_db.json --query "agent crashes"
 
 # Run gap analysis after article search
 python3 gap_analysis.py <incident_number>
 python3 simple_gap_analysis.py <incident_number>
 ```
 
-### Gap Analysis Feature
+#### Gap Analysis Feature
 
 The gap analysis feature compares incident troubleshooting steps against comprehensive knowledge base articles to identify missing steps:
 
@@ -367,53 +448,18 @@ The gap analysis feature compares incident troubleshooting steps against compreh
 - **Azure OpenAI Integration**: Uses Azure OpenAI for intelligent analysis and gap identification
 - **Execution Plans**: Generates specific commands and expected outcomes
 
-### Options
+#### Available Options
 - `--prompt-type TYPE`   Type of prompt (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, article_search_molecular, etc.)
-- `--azure`              Explicitly use Azure OpenAI (default behavior)
-- `--zai`                Use ZAI instead of Azure OpenAI
-- `--debug_api`          Enable API debugging
+- All operations use Azure Router (GPT-5) by default
+- `--debug`              Enable API debugging
 - `--articles-path PATH` Path to directory containing troubleshooting articles (for article search mode)
 - `--vector-db-path PATH` Path to vector database file (for article search mode)
 - `--summ`               Include summary from summary.txt
 - `--summ-docx`          Use summary.docx as input
 - `--troubleshooting-plan` Generate troubleshooting plan mode (first incident is primary, others are historical references)
+- `--timing`             Enable detailed timing analysis and reporting
 
 **Note:** If no `--prompt-type` is specified, the tool will display an interactive menu showing only molecular prompt types for selection.
-
-### Example Usage
-
-#### Complete Workflow (Recommended)
-The `main.py` script handles the entire pipeline automatically:
-
-Fetch, process, and summarize an incident with interactive prompt selection:
-```bash
-python main.py 654045297
-```
-
-Fetch, process, and summarize an incident with specific escalation prompt:
-```bash
-python main.py 654045297 --prompt-type escalation
-```
-
-Fetch, process, and summarize with molecular context (dynamic examples):
-```bash
-python main.py 654045297 --prompt-type escalation_molecular
-```
-
-Use ZAI instead of Azure OpenAI:
-```bash
-python main.py 654045297 --zai
-```
-
-Process multiple incidents with unified summarization:
-```bash
-python main.py 654045297 654045298 654045299 --prompt-type escalation_molecular
-```
-
-Generate troubleshooting plan based on historical incidents:
-```bash
-python main.py 654045297 654045298 654045299 654045300 --troubleshooting-plan
-```
 
 #### Manual Stage-by-Stage Processing
 You can also run each stage manually:
@@ -734,7 +780,10 @@ Summarizer/
 ├── processor.py                # AI processing and summarization engine
 ├── transformer.py              # Data transformation and cleaning
 ├── kusto_fetcher.py           # Azure Kusto data fetching
-├── memory_manager.py          # Memory integration with mem0
+├── memory/                    # Memory management system
+│   ├── memory_manager.py      # Memory integration with Qdrant
+│   ├── view_memories.py       # Memory viewing utilities
+│   └── examples/              # Memory usage examples
 ├── article_searcher.py        # Article search and vector operations
 ├── gap_analysis.py            # Advanced gap analysis functionality
 ├── simple_gap_analysis.py     # Simplified gap analysis tool
@@ -781,3 +830,4 @@ Summarizer/
 
 ## License
 MIT
+

@@ -56,7 +56,7 @@ def get_article_content(article: dict, article_searcher) -> str:
         return f"Error retrieving article content: {e}"
 
 def run_gap_analysis(incident_id: str, selected_article: dict, article_searcher):
-    """Run the gap analysis using Azure OpenAI directly."""
+    """Run the gap analysis using AI service directly."""
     
     # Load the incident data
     incident_file = f"processed_incidents/{incident_id}.json"
@@ -88,22 +88,16 @@ def run_gap_analysis(incident_id: str, selected_article: dict, article_searcher)
 {article_content}
 """
     
-    print("\n" + "="*80)
-    print("RUNNING GAP ANALYSIS")
-    print("="*80)
-    print(f"Incident: {incident_id}")
-    print(f"Article: {selected_article.get('title', 'Unknown')}")
-    print("="*80)
     
     # Generate the gap analysis using Azure OpenAI directly
     try:
         from openai import AzureOpenAI
         
-        # Initialize Azure OpenAI client
+        # Initialize AI Service client
         client = AzureOpenAI(
-            api_key=config.azure_openai_api_key,
-            api_version=config.azure_openai_api_version,
-            azure_endpoint=config.azure_openai_endpoint
+            api_key=config.ai_service_api_key,
+            api_version=config.ai_service_api_version,
+            azure_endpoint=config.ai_service_endpoint
         )
         
         # Create a more focused prompt that explicitly references the incident data
@@ -124,9 +118,9 @@ Your task is to:
 Focus ONLY on the Device Control policy issue described in the incident data. Do NOT analyze network connectivity or any other generic issues.
 """
         
-        print("🤖 Executing gap analysis with Azure OpenAI...")
+        print("🤖 Executing gap analysis with AI Service...")
         response = client.chat.completions.create(
-            model=config.azure_openai_deployment_name,
+            model=config.ai_service_deployment_name,
             messages=[
                 {"role": "system", "content": gap_analysis_prompt['system_prompt']},
                 {"role": "user", "content": focused_user_prompt}
@@ -217,9 +211,7 @@ def main():
         vector_db_path = "/Users/kirill/Documents/M/Code/AzureDevops/ArticlesInventorizer/article_embeddings.json"
         article_searcher = ArticleSearcher(
             vector_db_path=vector_db_path,
-            use_azure=bool(config.azure_openai_api_key),
-            use_azure_5=bool(config.azure_openai_5_api_key),
-            use_zai=bool(config.zai_api_key)
+            use_azure_router=True
         )
     except Exception as e:
         print(f"❌ Error initializing article searcher: {e}")
