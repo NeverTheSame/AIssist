@@ -1435,12 +1435,22 @@ class IncidentProcessor:
             with open(combined_json_path, 'r', encoding='utf-8') as f:
                 combined_data = json.load(f)
             
-            incidents = combined_data.get('incidents', [])
+            # Handle different JSON structures - check for nested content.incidents or direct incidents
+            if 'content' in combined_data and 'incidents' in combined_data['content']:
+                incidents = combined_data['content']['incidents']
+            elif 'incidents' in combined_data:
+                incidents = combined_data['incidents']
+            else:
+                incidents = []
+            
             total_incidents = combined_data.get('total_incidents', len(incidents))
             mode = combined_data.get('mode', 'standard')
             
             if not incidents:
                 logger.error("No incidents found in combined data")
+                logger.error(f"JSON structure keys: {list(combined_data.keys())}")
+                if 'content' in combined_data:
+                    logger.error(f"Content keys: {list(combined_data['content'].keys()) if isinstance(combined_data['content'], dict) else 'Not a dict'}")
                 return
             
             logger.info(f"Processing {len(incidents)} incidents for {mode} mode")
@@ -1454,7 +1464,8 @@ class IncidentProcessor:
             incident_numbers = []
             
             for incident in incidents:
-                incident_number = incident.get('incident_number', 'unknown')
+                # Handle both incident_number and incident_id fields
+                incident_number = incident.get('incident_number') or incident.get('incident_id') or 'unknown'
                 incident_numbers.append(incident_number)
                 
                 # Get conversation data
@@ -1942,8 +1953,8 @@ CRITICAL INSTRUCTIONS:
                 logger.info(f"Saved processed content to {summary_file}")
                 print(f"✅ Created: {summary_file}")
 
-            # Print the summary to the console
-            if ai_summary and 'summary' in ai_summary:
+            # Print the summary to the console (skip for prev_act_molecular to avoid duplication)
+            if ai_summary and 'summary' in ai_summary and prompt_type != 'prev_act_molecular':
                 print("\nAI Generated Summary:")
                 print("="*80)
                 print(ai_summary['summary'])
@@ -2018,11 +2029,11 @@ def main():
         # Always use Azure Router (GPT-5)
         use_azure_router = True
         
-        # Check Azure Router credentials
-        if not all([config.azure_router_api_key, config.azure_router_endpoint, 
-                   config.azure_router_api_version, config.azure_router_deployment_name]):
-            logger.error('Azure Router configuration is incomplete. Please check your .env file.')
-            raise ValueError('Azure Router configuration is incomplete. Please check your .env file.')
+        # Check AI Service credentials
+        if not all([config.ai_service_api_key, config.ai_service_endpoint, 
+                   config.ai_service_api_version, config.ai_service_deployment_name]):
+            logger.error('AI Service configuration is incomplete. Please check your .env file.')
+            raise ValueError('AI Service configuration is incomplete. Please check your .env file.')
 
         # Initialize processor with memory support, team analysis, and article search if needed
         enable_memory = not args.no_memory

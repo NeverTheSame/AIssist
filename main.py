@@ -1,4 +1,5 @@
 import sys
+import csv
 import subprocess
 import os
 import json
@@ -42,23 +43,75 @@ def setup_logging():
 # Setup logging at module level
 logger = setup_logging()
 
+def _detect_redacted_in_csv(csv_path: str) -> bool:
+    """Quick scan for exact redaction token in the 'Authored summary' section of the CSV."""
+    try:
+        if not os.path.exists(csv_path):
+            return False
+        in_authored = False
+        with open(csv_path, 'r', encoding='utf-8', newline='') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if not row:
+                    continue
+                first = row[0].strip() if row[0] else ''
+                # Section headers are like: --- Authored summary ---
+                if first.startswith('---') and first.endswith('---'):
+                    section_name = first.strip('- ').strip()
+                    in_authored = (section_name.lower() == 'authored summary')
+                    continue
+                if in_authored:
+                    # Look for an exact token: ** REDACTED ** (case-insensitive, flexible inner spacing)
+                    import re
+                    for c in row:
+                        if not isinstance(c, str):
+                            continue
+                        if re.match(r"^\s*\*\*\s*REDACTED\s*\*\*\s*$", c.strip(), flags=re.IGNORECASE):
+                            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Failed CSV redaction scan: {e}")
+        return False
+
 def show_prompt_menu():
     """Display available prompts and get user selection"""
     try:
         with open("prompts.json", "r", encoding="utf-8") as f:
             prompts = json.load(f)
         
-        # Filter to show molecular prompt types and create_prompt_for_logs_analyze
-        prompt_types = [pt for pt in prompts.keys() if pt.endswith('_molecular') or pt == 'create_prompt_for_logs_analyze']
+        # Filter to show molecular prompt types and specific analysis prompts
+        prompt_types = [pt for pt in prompts.keys() if pt.endswith('_molecular') or pt in ['create_prompt_for_logs_analyze', 'stage_duration_analysis', 'resolution_delay_analysis']]
         
         if not prompt_types:
-            print("No molecular prompt types found in prompts.json")
+            print("No prompt types found in prompts.json")
             sys.exit(1)
         
-        print("\nAvailable molecular prompt types:")
+        # Emoji mapping for each prompt type
+        prompt_emojis = {
+            'customer_pending_facilitation_molecular': '👤',
+            'dev_pending_facilitation_molecular': '👨‍💻',
+            'escalation_molecular': '📈',
+            'mitigation_molecular': '🛡️',
+            'troubleshooting_molecular': '🔧',
+            'wait_time_molecular': '⏱️',
+            'stage_duration_analysis': '📊',
+            'prev_act_molecular': '🔒',
+            'weekly_insights_molecular': '📅',
+            'article_search_molecular': '🔍',
+            'troubleshooting_plan_molecular': '📋',
+            'create_prompt_for_logs_analyze': '📝',
+            'improvement_analysis_molecular': '💡',
+            'kb_article_molecular': '📚',
+            'product_improvement_email_molecular': '✉️',
+            'runbook_creation_request_molecular': '📖',
+            'resolution_delay_analysis': '⏳'
+        }
+        
+        print("\nAvailable prompt types:")
         print("=" * 40)
         for i, prompt_type in enumerate(prompt_types, 1):
-            print(f"{i:2d}. {prompt_type}")
+            emoji = prompt_emojis.get(prompt_type, '•')
+            print(f"{i:2d}. {emoji} {prompt_type}")
         print("=" * 40)
         
         while True:
@@ -181,6 +234,13 @@ def fetch_incident_data(incident_number):
     
     logger.info(f"Successfully fetched data for incident {incident_number}. CSV file created at {csv_path}")
     print(f"✅ Created: {csv_path}")
+    # Immediately detect redacted authored summary for user awareness
+    try:
+        if _detect_redacted_in_csv(csv_path):
+            print(f"⚠️  Authored summary appears REDACTED for incident {incident_number}. Using manual.docx if available.")
+    except Exception:
+        # Non-blocking: continue even if detection fails
+        pass
     return True
 
 @time_operation("process_incident_to_json", "process")
@@ -204,7 +264,25 @@ def process_incident_to_json(incident_number):
         
         logger.info(f"Successfully processed CSV to JSON for incident {incident_number}")
         logger.info(f"STDOUT: {result.stdout}")
+        # Surface transformer logs (including LLM request/response previews) to console before AI step
+        if result.stdout:
+            print(result.stdout)
         print(f"✅ Created: processed_incidents/{incident_number}.json")
+        
+        # Gate: if the produced JSON has redacted summary, do not proceed to AI
+        json_path = os.path.join("processed_incidents", f"{incident_number}.json")
+        try:
+            with open(json_path, 'r', encoding='utf-8') as jf:
+                produced = json.load(jf)
+            produced_summary = (produced.get("summary", "") or "").strip()
+            import re
+            if isinstance(produced_summary, str) and re.match(r"^\s*\*\*\s*REDACTED\s*\*\*\s*$", produced_summary, flags=re.IGNORECASE):
+                print(f"❌ Summary is '** REDACTED **' in {json_path}. Aborting further AI processing.")
+                # Raise to prevent downstream processing
+                raise RuntimeError("Redacted summary detected - stopping pipeline before AI step")
+        except FileNotFoundError:
+            # If file is missing, let the caller handle
+            pass
         
     except subprocess.CalledProcessError as e:
         logger.error(f"CSV to JSON conversion failed for incident {incident_number}")
@@ -316,6 +394,67 @@ def create_troubleshooting_plan_data(incident_numbers):
     print(f"✅ Created: {combined_path}")
     return combined_path
 
+def _process_combined_incidents(processor, combined_data, prompts, prompt_type, debug_api, incident_numbers):
+    """Helper function to process combined incidents for troubleshooting plan."""
+    # Extract incidents from combined data
+    incidents = combined_data.get('incidents', [])
+    
+    if len(incidents) < 2:
+        logger.error("Combined incidents data must contain at least 2 incidents")
+        return
+    
+    # First incident is the reference (with successful troubleshooting)
+    reference_incident = incidents[0]
+    # Second incident is the primary (needs troubleshooting plan)
+    primary_incident = incidents[1]
+    
+    # Extract conversations from both incidents
+    reference_conversation = reference_incident.get('conversation', [])
+    primary_conversation = primary_incident.get('conversation', [])
+    
+    # Create a structured data format for the LLM
+    structured_data = {
+        "reference_incident": {
+            "incident_id": reference_incident.get('incident_id', incident_numbers[0]),
+            "conversation": reference_conversation,
+            "total_entries": reference_incident.get('total_entries', 0)
+        },
+        "primary_incident": {
+            "incident_id": primary_incident.get('incident_id', incident_numbers[1]),
+            "conversation": primary_conversation,
+            "total_entries": primary_incident.get('total_entries', 0)
+        }
+    }
+    
+    # Process using the processor with the structured data
+    try:
+        summary_result = processor.process_incident(
+            incident_data=structured_data,
+            prompts=prompts,
+            prompt_type=prompt_type,
+            debug_api=debug_api
+        )
+        
+        # Display the summary
+        if summary_result and 'summary' in summary_result:
+            print("\nAI Generated Summary:")
+            print("="*80)
+            print(summary_result['summary'])
+            print("="*80)
+            
+            # Print molecular context info if available
+            if 'molecular_context' in summary_result:
+                print(f"Molecular Context: {summary_result['molecular_context']}")
+        
+        # Save the results
+        output_file = f"combined_{'_'.join(incident_numbers)}"
+        processor.save_results(summary_result, output_file)
+        
+    except Exception as e:
+        logger.error(f"Error processing combined incidents: {e}")
+        print(f"Error processing combined incidents: {e}")
+        raise
+
 def _process_single_incident(processor, incident_data, prompts, prompt_type, debug_api, incident_id):
     """Helper function to process a single incident."""
     # Extract conversation data (needed for all modes)
@@ -356,6 +495,43 @@ def _process_single_incident(processor, incident_data, prompts, prompt_type, deb
             print("="*80)
             print(summary_result['analysis'])
             print("="*80)
+    elif prompt_type == 'prev_act_molecular':
+        # Use preventative action processing
+        summary = incident_data.get('summary', None)
+        formatted_content = processor.format_conversation_with_ai_summary(conversation, summary=summary)
+        
+        summary_result = processor.generate_summary(
+            [{'type': 'text', 'content': formatted_content}],
+            prompts['system_prompt'],
+            prompts['user_prompt'],
+            prompt_type=prompt_type,
+            debug_api=debug_api,
+            incident_data=incident_data
+        )
+        
+        # Display LLM analysis
+        if summary_result and 'summary' in summary_result:
+            print("\n" + "="*80)
+            print("PREVENTATIVE ACTION ANALYSIS")
+            print("="*80)
+            print(summary_result['summary'])
+            print("="*80)
+        
+        # Launch preventative action manager
+        print("\n" + "="*80)
+        print("PREVENTATIVE ACTION MANAGEMENT")
+        print("="*80)
+        
+        # Import and run PA manager
+        try:
+            from preventative_actions.pa_manager import PreventativeActionManager
+            pa_manager = PreventativeActionManager()
+            pa_manager.interactive_create(incident_id, processor, existing_analysis=summary_result)
+        except Exception as e:
+            logger.error(f"Error launching PA manager: {e}")
+            print(f"Error launching PA manager: {e}")
+            import traceback
+            traceback.print_exc()
     elif prompt_type == 'logs_analyzer':
         # Use logs analyzer processing
         summary_result = processor.process_logs_analyzer(
@@ -415,7 +591,7 @@ def _process_single_incident(processor, incident_data, prompts, prompt_type, deb
             incident_data=incident_data
         )
     
-    # Save results
+    # Save results (always save, but for prev_act_molecular we also launch PA manager)
     operation_time = datetime.now().isoformat()
     model_name = processor.deployment_name if hasattr(processor, 'deployment_name') else "unknown"
     
@@ -451,7 +627,7 @@ def main():
             processed_args.append(arg)
     
     parser = argparse.ArgumentParser(description="Process multiple support incidents and provide unified summarization")
-    parser.add_argument("incident_numbers", nargs="+", help="One or more incident numbers to process")
+    parser.add_argument("incident_numbers", nargs="*", help="One or more incident numbers to process")
     parser.add_argument("--prompt-type", help="Type of prompt to use for summarization")
     # Always use AI Service (GPT-5) - no model selection needed
     parser.add_argument("--debug", "-d", action="store_true", help="Enable API debugging")
@@ -460,9 +636,171 @@ def main():
     parser.add_argument("--vector-db-path", help="Path to vector database file (for memory management)")
     parser.add_argument("--timing", action="store_true", help="Enable detailed timing analysis and reporting")
     parser.add_argument("--enable-team-analysis", action="store_true", help="Enable team analysis and team matching features")
+    parser.add_argument("--multi-incident", action="store_true", help="Process multiple incidents directly (for debugging or specific use cases)")
+    parser.add_argument("--input-file", help="Path to a JSON file containing incident data (for single or multi-incident mode)")
     
     args = parser.parse_args(processed_args)
     enable_timing = args.timing
+    
+    # Handle --input-file mode early (works for both single and multi-incident)
+    if args.input_file:
+        # Handle --multi-incident mode with input file
+        if args.multi_incident:
+            if not args.prompt_type:
+                logger.error("--prompt-type is required when using --multi-incident mode")
+                print("Error: --prompt-type is required when using --multi-incident mode")
+                sys.exit(1)
+            
+            # Process directly using processor.py
+            try:
+                from processor import IncidentProcessor, load_prompts
+                
+                # Load prompts
+                prompts = load_prompts(args.prompt_type)
+                
+                # Initialize processor
+                processor = IncidentProcessor(
+                    enable_memory=True,
+                    enable_team_analysis=args.enable_team_analysis,
+                    articles_path=args.articles_embeddings,
+                    vector_db_path=args.vector_db_path,
+                    enable_timing=enable_timing
+                )
+                
+                # Process multiple incidents
+                processor.process_multiple_incidents(args.input_file, prompts, args.prompt_type, args.debug)
+                return
+            except Exception as e:
+                logger.error(f"Error processing multiple incidents: {e}")
+                print(f"Error: {e}")
+                sys.exit(1)
+        
+        # Handle single incident with input file
+        else:
+            # Reset and start timing for the entire workflow only if enabled
+            if enable_timing:
+                reset_timing_data()
+                start_timing()
+            
+            logger.info("=" * 80)
+            logger.info("Starting Summarizer application with input file")
+            logger.info("=" * 80)
+            
+            # Validate input file exists
+            if not os.path.exists(args.input_file):
+                logger.error(f"Input file not found: {args.input_file}")
+                print(f"Error: Input file not found: {args.input_file}")
+                sys.exit(1)
+            
+            # Load and adapt the file format if needed
+            try:
+                with open(args.input_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # Adapt file format if needed (convert content/ai_summary to conversation/summary)
+                if 'content' in data and 'conversation' not in data:
+                    data['conversation'] = data.pop('content')
+                    logger.info("Adapted 'content' field to 'conversation'")
+                
+                if 'ai_summary' in data and 'summary' not in data:
+                    if isinstance(data['ai_summary'], dict) and 'summary' in data['ai_summary']:
+                        data['summary'] = data['ai_summary']['summary']
+                    logger.info("Adapted 'ai_summary.summary' to 'summary'")
+                
+                # Extract incident number
+                incident_number = data.get('incident_number') or data.get('incident_id') or os.path.basename(args.input_file).replace('.json', '').replace('incident_', '')
+                
+                # Select prompt type if not provided
+                if not args.prompt_type:
+                    logger.info("No prompt type specified, showing interactive menu")
+                    prompt_type, auto_vector_db_path = show_prompt_menu()
+                    if auto_vector_db_path and not args.vector_db_path:
+                        args.vector_db_path = auto_vector_db_path
+                        logger.info(f"Auto-detected vector database path: {auto_vector_db_path}")
+                else:
+                    prompt_type = args.prompt_type
+                
+                # Validate prompt type
+                try:
+                    with open("prompts.json", "r", encoding="utf-8") as f:
+                        prompts_dict = json.load(f)
+                    if prompt_type not in prompts_dict:
+                        available = list(prompts_dict.keys())
+                        error_msg = f"Prompt type '{prompt_type}' not found. Available types: {available}"
+                        logger.error(error_msg)
+                        print(error_msg)
+                        sys.exit(1)
+                except Exception as e:
+                    logger.error(f"Error reading prompts.json: {e}")
+                    print(f"Error reading prompts.json: {e}")
+                    sys.exit(1)
+                
+                # Set default vector database path if needed
+                if prompt_type == 'article_search_molecular' and not args.vector_db_path:
+                    from config import config
+                    default_vector_db_path = config.default_vector_db_path
+                    if default_vector_db_path:
+                        args.vector_db_path = default_vector_db_path
+                        logger.info(f"🔍 Article search mode detected - automatically using vector database: {default_vector_db_path}")
+                        print(f"🔍 Article search mode detected - automatically using vector database: {default_vector_db_path}")
+                
+                # Load prompts
+                from processor import IncidentProcessor, load_prompts
+                prompts = load_prompts(prompt_type)
+                
+                # Initialize processor
+                processor = IncidentProcessor(
+                    enable_memory=True,
+                    enable_team_analysis=args.enable_team_analysis,
+                    articles_path=args.articles_embeddings,
+                    vector_db_path=args.vector_db_path,
+                    enable_timing=enable_timing
+                )
+                
+                # Process the incident
+                print(f"Processing incident from file: {args.input_file}")
+                print(f"Incident number: {incident_number}")
+                print(f"Prompt type: {prompt_type}")
+                
+                if enable_timing:
+                    from timing_utils import time_context
+                    with time_context("ai_processing_detailed", "ai", {
+                        "incident_count": 1,
+                        "prompt_type": prompt_type,
+                        "from_input_file": True
+                    }):
+                        _process_single_incident(processor, data, prompts, prompt_type, args.debug, incident_number)
+                else:
+                    _process_single_incident(processor, data, prompts, prompt_type, args.debug, incident_number)
+                
+                logger.info("AI processing completed successfully")
+                
+                # End timing and print summary only if timing is enabled
+                if enable_timing:
+                    end_timing()
+                    print_timing_summary()
+                    save_timing_report()
+                
+                logger.info("=" * 80)
+                logger.info("Summarizer application completed successfully")
+                logger.info("=" * 80)
+                
+                return
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing JSON file: {e}")
+                print(f"Error: Invalid JSON file: {e}")
+                sys.exit(1)
+            except Exception as e:
+                logger.error(f"Error processing input file: {e}")
+                print(f"Error: {e}")
+                import traceback
+                traceback.print_exc()
+                sys.exit(1)
+    
+    # Validate that incident_numbers are provided for non-multi-incident mode
+    if not args.multi_incident and not args.incident_numbers and not args.input_file:
+        parser.error("incident_numbers are required when not using --multi-incident or --input-file mode")
     
     # Reset and start timing for the entire workflow only if enabled
     if enable_timing:
@@ -625,13 +963,61 @@ def main():
     elif len(successful_incidents) > 1:
         logger.info("Combining multiple incidents for unified processing...")
         combined_json_path = combine_incident_data(successful_incidents)
-        # Step 4: Process combined JSON with AI
+        # Step 4: Process combined JSON with AI directly
         print("Processing combined incidents with AI...")
-        ai_cmd = [
-            sys.executable, "processor.py", combined_json_path, "--prompt-type", prompt_type, "--multi-incident"
-        ]
-        if not enable_team_analysis:
-            ai_cmd.append("--no-team-analysis")
+        
+        # Import and call processor directly for multiple incidents to show output
+        try:
+            from processor import IncidentProcessor, load_prompts
+            
+            # Load the combined incident data
+            with open(combined_json_path, 'r', encoding='utf-8') as f:
+                incident_data = json.load(f)
+            
+            # Load prompts
+            prompts = load_prompts(prompt_type)
+            
+            # Initialize processor (always uses AI Service GPT-5)
+            processor = IncidentProcessor(
+                enable_memory=True,
+                enable_team_analysis=enable_team_analysis,
+                articles_path=articles_embeddings,
+                vector_db_path=vector_db_path,
+                enable_timing=enable_timing
+            )
+            
+            # Process the combined incidents
+            if enable_timing:
+                from timing_utils import time_context
+                with time_context("ai_processing_detailed", "ai", {
+                    "incident_count": len(successful_incidents),
+                    "prompt_type": prompt_type,
+                    "troubleshooting_plan_mode": False
+                }):
+                    _process_combined_incidents(processor, incident_data, prompts, prompt_type, debug_api, successful_incidents)
+            else:
+                _process_combined_incidents(processor, incident_data, prompts, prompt_type, debug_api, successful_incidents)
+            
+            logger.info("AI processing completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error in direct AI processing: {e}")
+            # Fallback to subprocess approach
+            ai_cmd = [
+                sys.executable, "processor.py", combined_json_path, "--prompt-type", prompt_type, "--multi-incident"
+            ]
+            if not enable_team_analysis:
+                ai_cmd.append("--no-team-analysis")
+            
+            logger.info(f"Falling back to subprocess: {' '.join(ai_cmd)}")
+            
+            try:
+                result = subprocess.run(ai_cmd, check=True)
+                logger.info("AI processing completed successfully")
+            except subprocess.CalledProcessError as e:
+                logger.error("AI processing failed")
+                logger.error(f"Return code: {e.returncode}")
+                raise
     else:
         # Single incident - process directly for better timing granularity
         json_path = os.path.join("processed_incidents", f"{successful_incidents[0]}.json")

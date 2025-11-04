@@ -86,6 +86,12 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 - **tqdm**: Progress bars for long-running operations
 - **requests**: HTTP client for API calls
 
+### MCP Integration
+- **Model Context Protocol (MCP)**: Enables VS Code integration with GitHub Copilot Chat
+- **Azure-Authenticated Kusto Access**: Secure database access through MCP proxy
+- **Node.js MCP Proxy**: HTTP proxy server for Azure authentication
+- **VS Code Integration**: Seamless integration with GitHub Copilot Chat
+
 ## Key Features
 
 ### Data Management
@@ -100,12 +106,22 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 - **Memory Integration**: Learns from previous incidents to provide better context
 - **Article Search**: Finds relevant troubleshooting articles using semantic search
 - **Gap Analysis**: Identifies missing troubleshooting steps by comparing against knowledge base
+- **Knowledge Base Generation**: Creates comprehensive runbooks and KB articles from incident data
+- **Team Knowledge Management**: Tracks team expertise and interaction patterns
+- **Process Improvement Analysis**: Identifies opportunities for process enhancement
 
 ### User Experience
 - **Interactive Prompt Selection**: Presents menu of available prompt types
 - **Flexible Configuration**: Supports multiple AI providers and custom settings
 - **Cost Tracking**: Monitors token usage and API costs
 - **Comprehensive Logging**: Detailed logs for debugging and monitoring
+
+### Specialized Tools and Features
+- **VIP Customer Tracking**: Specialized incident fetcher for high-priority customers
+- **MCP Integration**: VS Code integration with GitHub Copilot Chat for Kusto queries
+- **Team Knowledge System**: Automated team detection and expertise mapping
+- **Documentation Generation**: Creates comprehensive runbooks following industry best practices
+- **Process Improvement**: Analyzes incidents for optimization opportunities
 
 ## How It Works
 
@@ -170,6 +186,8 @@ The system supports various prompt types for different analysis needs:
 - **`wait_time_molecular`**: Analyzes incident wait times by team
 - **`prev_act_molecular`**: Recommends preventative actions
 - **`weekly_insights_molecular`**: Generates weekly status updates
+- **`kb_article_molecular`**: Creates knowledge base articles and runbooks from incident data
+- **`improvement_analysis_molecular`**: Analyzes incidents for process improvement opportunities
 
 ### Standard Prompt Types
 - **`escalation_plain`**: Basic escalation summaries
@@ -181,6 +199,7 @@ The system supports various prompt types for different analysis needs:
 - **`troubleshooting_gap_analysis`**: Compares incident steps against knowledge base
 - **`care_incident_facilitation`**: CARE team facilitation summaries
 - **`icm_delay_analysis`**: Identifies reasons for incident delays
+- **`create_prompt_for_logs_analyze`**: Creates tailored investigation prompts for log analysis
 
 ## Configuration
 
@@ -342,6 +361,31 @@ Generate troubleshooting plan based on historical incidents:
 python main.py 654045297 654045298 654045299 654045300 --troubleshooting-plan
 ```
 
+Generate weekly insights for multiple incidents (CRI Weekly Insights):
+```bash
+# Process multiple incidents from scratch
+python3 main.py 667536660 686775744 693453104 698309282 698781262 --prompt-type weekly_insights_molecular
+
+# Process from existing combined JSON file
+python3 main.py --multi-incident --input-file processed_incidents/incident_combined_667536660_686775744_693453104_698309282_698781262.json --prompt-type weekly_insights_molecular
+```
+
+Generate knowledge base article from incident data:
+```bash
+python main.py 654045297 --prompt-type kb_article_molecular
+```
+
+Analyze incident for improvement opportunities:
+```bash
+python main.py 654045297 --prompt-type improvement_analysis_molecular
+```
+
+Fetch VIP customer incidents:
+```bash
+cd vip_incidents
+python3 fetch_vip_incidents.py
+```
+
 ## How to Test
 
 ### Testing the Application
@@ -449,7 +493,7 @@ The gap analysis feature compares incident troubleshooting steps against compreh
 - **Execution Plans**: Generates specific commands and expected outcomes
 
 #### Available Options
-- `--prompt-type TYPE`   Type of prompt (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, article_search_molecular, etc.)
+- `--prompt-type TYPE`   Type of prompt (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, article_search_molecular, weekly_insights_molecular, etc.)
 - All operations use Azure Router (GPT-5) by default
 - `--debug`              Enable API debugging
 - `--articles-path PATH` Path to directory containing troubleshooting articles (for article search mode)
@@ -457,6 +501,8 @@ The gap analysis feature compares incident troubleshooting steps against compreh
 - `--summ`               Include summary from summary.txt
 - `--summ-docx`          Use summary.docx as input
 - `--troubleshooting-plan` Generate troubleshooting plan mode (first incident is primary, others are historical references)
+- `--multi-incident`     Process multiple incidents directly from existing JSON file (requires --input-file)
+- `--input-file PATH`    Path to JSON file containing combined incident data (for use with --multi-incident)
 - `--timing`             Enable detailed timing analysis and reporting
 
 **Note:** If no `--prompt-type` is specified, the tool will display an interactive menu showing only molecular prompt types for selection.
@@ -497,11 +543,12 @@ The tool follows a three-stage pipeline:
 4. **Outputs structured JSON** files optimized for LLM processing.
 
 #### Stage 3: AI Analysis (`processor.py`)
-1. **For single incidents**: Processes and summarizes the incident using Azure OpenAI (or ZAI if specified).
+1. **For single incidents**: Processes and summarizes the incident using Azure Router (GPT-5).
 2. **For multiple incidents**: Combines all incident data and generates a unified summary.
 3. **For troubleshooting plan mode**: Analyzes the first incident as the primary issue and uses other incidents as historical references to generate a comprehensive troubleshooting plan.
-4. **Outputs results** to the appropriate directories (`processed_incidents/`, `summaries/`).
-5. **If a `_molecular` prompt type is used**, the tool dynamically selects relevant examples from `molecular_examples.json` and injects them into the prompt for improved context and summary quality.
+4. **For weekly insights mode**: Processes multiple incidents with focus on active days, blockers, and overall delay analysis.
+5. **Outputs results** to the appropriate directories (`processed_incidents/`, `summaries/`).
+6. **If a `_molecular` prompt type is used**, the tool dynamically selects relevant examples from `molecular_examples.json` and injects them into the prompt for improved context and summary quality.
 
 ### Troubleshooting Plan Mode
 
@@ -525,6 +572,63 @@ python main.py 1111 22222 33333 4444 --troubleshooting-plan
 - Step-by-step troubleshooting plan
 - Risk assessment for each step
 - Success criteria and escalation points
+
+### Weekly Insights Mode (CRI Weekly Insights)
+
+The `weekly_insights_molecular` prompt is designed to create concise, actionable weekly status updates for multiple ongoing technical incidents, focusing on longest-running incidents and their blockers.
+
+**Features:**
+- **Active Days Calculation**: Automatically calculates and displays the number of days each incident has been active
+- **Blocker Emphasis**: Highlights the primary factors causing extended duration for each incident
+- **Overall Summary**: Provides a comprehensive summary paragraph outlining overall delays and common blockers across all incidents
+- **Formatted Output**: Each incident appears on separate lines with clear formatting for easy reading
+
+**How it works:**
+1. **Process Multiple Incidents**: Provide multiple incident numbers to analyze together
+2. **Active Days Calculation**: The system calculates days active from the first timestamp in the incident conversation
+3. **Status Analysis**: For each incident, provides current status, days active, primary blocker, and next action
+4. **Summary Generation**: Creates an overall summary with average active days and common blocker patterns
+
+**Usage Examples:**
+
+Process multiple incidents from scratch:
+```bash
+python3 main.py 667536660 686775744 693453104 698309282 698781262 --prompt-type weekly_insights_molecular
+```
+
+Process from existing combined JSON file (when you already have processed incident data):
+```bash
+python3 main.py --multi-incident --input-file processed_incidents/incident_combined_667536660_686775744_693453104_698309282_698781262.json --prompt-type weekly_insights_molecular
+```
+
+**Output Format:**
+Each incident includes:
+- Incident number and title
+- Current status and trend (improving/degrading/stable)
+- Number of days active
+- Primary blocker or factor causing extended duration
+- Immediate next action with timeline
+
+Followed by:
+- **Summary**: Overall analysis with average active days and primary reasons these ICMs are still open
+
+**Example Output:**
+```
+Incident #667536660 - macOS Defender Portal Duplicate Devices
+Status: Stable but unresolved; duplicates persist despite multiple cleanup PRs. Active for 230 days. Primary blocker is complex root cause involving backend and device state inconsistencies. Next: Await customer logs and backend team analysis; follow-up within 3 days.
+
+Incident #686775744 - macOS Device Connectivity Issue on XDR Portal
+Status: Stable; transient connectivity state occurs after sleep. Active for 47 days. Blocker is proxy reconnection delay and portal status update latency. Next: Device Health and Portal teams to confirm expected behavior; update by end of week.
+
+Summary:
+The open incidents have been active on average 57 days, with primary delays caused by multi-team coordination challenges, complex backend and client state issues, and configuration management complexities. Engineering teams are prioritizing targeted remediation actions with defined timelines.
+```
+
+**Best Practices:**
+- Use for weekly status reviews of longest-running incidents
+- Focus on incidents that need leadership attention due to extended duration
+- Include incidents that are blocked by similar root causes for better pattern identification
+- Review the summary section to identify common blockers that may need process improvements
 
 ## Memory Integration
 
@@ -784,6 +888,23 @@ Summarizer/
 │   ├── memory_manager.py      # Memory integration with Qdrant
 │   ├── view_memories.py       # Memory viewing utilities
 │   └── examples/              # Memory usage examples
+├── team_knowledge/            # Team knowledge management system
+│   ├── team_knowledge_manager.py  # Team detection and analysis
+│   ├── teams_matcher.py       # Team pattern matching
+│   ├── TEAM_KNOWLEDGE_SYSTEM.md  # Team system documentation
+│   └── teams/                 # Team knowledge databases
+├── MCP-Proxy/                 # MCP proxy for VS Code integration
+│   ├── mcp-http-proxy.js      # HTTP proxy server
+│   ├── package.json           # Node.js dependencies
+│   └── README.md              # MCP proxy documentation
+├── vip_incidents/             # VIP customer incident tracking
+│   ├── fetch_vip_incidents.py # VIP incident fetcher
+│   └── README.md              # VIP incidents documentation
+├── Documentation/             # Comprehensive documentation
+│   ├── kusto-mcp-guide.md     # Kusto MCP integration guide
+│   ├── kusto-quick-ref.md     # Quick reference for Kusto
+│   ├── logs-analysis-protocol.md  # Log analysis procedures
+│   └── unified-mcp-complete-guide.md  # Complete MCP guide
 ├── article_searcher.py        # Article search and vector operations
 ├── gap_analysis.py            # Advanced gap analysis functionality
 ├── simple_gap_analysis.py     # Simplified gap analysis tool
@@ -803,7 +924,41 @@ Summarizer/
 
 ## Recent Improvements
 
-### Gap Analysis Feature (Latest)
+### Knowledge Base Article Generation (Latest)
+- **KB Article Creation**: New `kb_article_molecular` prompt creates comprehensive runbooks from incident data
+- **Runbook Best Practices**: Follows industry standards with structured sections including purpose, scope, prerequisites, and validation steps
+- **Incident-Based Content**: Uses only actual troubleshooting steps performed in incidents for accuracy
+- **Comprehensive Structure**: Includes title, purpose, scope, prerequisites, symptoms, root cause, troubleshooting procedure, resolution, verification, and prevention sections
+- **Expected Outcomes**: Each step includes expected outcomes and validation steps for better execution
+
+### Team Knowledge Management System
+- **Team Detection Engine**: Automatically identifies teams involved in incidents
+- **Team Expertise Mapping**: Builds knowledge about what each team does and their areas of expertise
+- **Team Interaction Analysis**: Tracks ownership changes, acknowledgments, and escalation patterns
+- **Team Context Enhancement**: Provides team-specific context to AI prompts
+- **Continuous Learning**: Updates team knowledge from new incidents over time
+
+### MCP Integration and Kusto Access
+- **MCP Proxy**: HTTP proxy for Azure-authenticated Kusto access through VS Code
+- **Real Azure Authentication**: Uses actual Azure AD tokens for secure database access
+- **VS Code Integration**: Works seamlessly with GitHub Copilot Chat in VS Code
+- **Multi-Cluster Support**: Access to multiple Kusto clusters with proper authentication
+- **Token Management**: Automatic token caching and renewal
+
+### VIP Customer Incident Tracking
+- **VIP Customer Focus**: Specialized incident fetcher for high-priority customers
+- **Flexible Search Methods**: Both customer name and tenant ID search options
+- **Comprehensive Reporting**: Detailed breakdowns by customer, status, and severity
+- **Automated Data Export**: CSV output with timestamped results
+- **Customer Variations**: Handles different name variations and spelling differences
+
+### Enhanced Documentation System
+- **Kusto MCP Guide**: Comprehensive guide for Kusto database integration
+- **Unified MCP Guide**: Complete documentation for MCP server integration
+- **Logs Analysis Protocol**: Standardized approach to log analysis and investigation
+- **Quick Reference**: Quick reference guides for common operations
+
+### Gap Analysis Feature
 - **Intelligent Gap Analysis**: Compares incident data against troubleshooting articles to identify missing steps
 - **Real Content Retrieval**: Accesses actual troubleshooting content from local knowledge base directory
 - **Azure OpenAI Integration**: Uses Azure OpenAI for intelligent analysis and gap identification

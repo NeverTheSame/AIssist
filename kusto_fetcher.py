@@ -189,6 +189,12 @@ def remove_img_data_tags(text):
     if not isinstance(text, str):
         return text
     
+    # If text doesn't contain any image data URLs, return it unchanged
+    # This ensures we don't accidentally process or modify text that doesn't need processing
+    # This preserves any REDACTED markers or other content that comes from Kusto
+    if 'data:image' not in text.lower():
+        return text
+    
     # Pattern to match any data:image/*;base64, followed by the encrypted data
     # This handles img tags, background-image CSS, and other data URL patterns
     # The pattern now properly handles quoted attributes and various base64 character sets
@@ -278,13 +284,28 @@ def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms")
             writer.writerow(column_names)
             for row in table:
                 processed_row = []
-                for cell in row:
+                for cell_idx, cell in enumerate(row):
+                    # Debug logging for Authored summary section to see raw Kusto data
+                    if idx == 1 and cell_idx == 0:  # Authored summary section, first column (Summary)
+                        cell_preview = str(cell)[:200] if cell else "None"
+                        print(f"[kusto_fetcher] DEBUG: Raw cell from Kusto (Preview): {cell_preview}...")
+                        if cell and isinstance(cell, str) and 'REDACTED' in cell:
+                            print(f"[kusto_fetcher] WARNING: Cell contains REDACTED marker from Kusto (length: {len(cell)})")
+                    cell_original = cell
                     # For authored summary section, collect text for screenshot processing
                     if idx == 1 and isinstance(cell, str):  # Authored summary section
                         authored_summary_text += cell + "\n"
                     
-                    # For now, still use the old redaction method in CSV
-                    cleaned_cell = remove_img_data_tags(cell)
+                    # Apply redaction only to image data URLs, preserving all other text content
+                    if isinstance(cell, str):
+                        cleaned_cell = remove_img_data_tags(cell)
+                        # Additional debug logging if content was changed
+                        if idx == 1 and cell_idx == 0 and cell_original != cleaned_cell:
+                            print(f"[kusto_fetcher] DEBUG: Cell content was modified by remove_img_data_tags")
+                            print(f"[kusto_fetcher] DEBUG: Original (first 200 chars): {str(cell_original)[:200]}")
+                            print(f"[kusto_fetcher] DEBUG: Cleaned (first 200 chars): {str(cleaned_cell)[:200]}")
+                    else:
+                        cleaned_cell = cell
                     processed_row.append(cleaned_cell)
                 writer.writerow(processed_row)
     
