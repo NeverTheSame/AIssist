@@ -610,64 +610,6 @@ def main():
                     st.error(f"❌ Missing required fields: {', '.join(missing)}")
                     st.warning("Please fill in all required AI Service fields.")
         
-        # Show help for getting token (outside form)
-        st.markdown("---")
-            with st.expander("📖 How to get Azure Access Token"):
-                st.markdown("""
-                **Option 1: Using Python script (easiest)**
-                ```bash
-                python3 get_azure_token.py
-                ```
-                
-                **Option 2: Using Azure CLI directly**
-                ```bash
-                az login
-                az account get-access-token --resource https://icmcluster.kusto.windows.net
-                ```
-                Then copy the `accessToken` value from the JSON output.
-                
-                **Token expires after ~1 hour.** You'll need to get a new token when it expires.
-                """)
-            
-            st.markdown("---")
-            st.subheader("Alternative Data Sources (Optional)")
-            st.markdown("**Use these to avoid VPN requirements on Streamlit Cloud.**")
-            
-            col7, col8 = st.columns(2)
-            
-            with col7:
-                kusto_api_url = st.text_input(
-                    "Local API URL (Option 1)",
-                    value=st.session_state.user_config.get('KUSTO_API_URL', ''),
-                    help="URL of local API service (e.g., https://xxxx.ngrok.io). See local_kusto_api.py"
-                )
-            
-            with col8:
-                azure_storage_conn = st.text_input(
-                    "Azure Blob Storage Connection (Option 2)",
-                    value=st.session_state.user_config.get('AZURE_STORAGE_CONNECTION_STRING', ''),
-                    type="password",
-                    help="Azure Storage connection string. See azure_blob_bridge.py"
-                )
-            
-            with st.expander("📖 About Alternative Data Sources"):
-                st.markdown("""
-                **Option 1: Local API Service** (Recommended for quick setup)
-                - Run `python3 local_kusto_api.py` on your machine (with VPN)
-                - Expose with `ngrok http 5000`
-                - Enter the ngrok URL above
-                - Streamlit will call your local API to fetch data
-                
-                **Option 2: Azure Blob Storage** (Recommended for automation)
-                - Run `python3 azure_blob_bridge.py <incident>` locally (with VPN)
-                - Script uploads data to Azure Blob Storage
-                - Streamlit reads from blob storage
-                - Can be automated with cron/task scheduler
-                
-                See `VPN_WORKAROUND_OPTIONS.md` for detailed setup instructions.
-                """)
-            
-            submitted_config = st.form_submit_button("💾 Save Configuration", use_container_width=True)
         
         # Show current config status
         st.markdown("---")
