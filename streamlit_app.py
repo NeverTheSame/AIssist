@@ -52,6 +52,37 @@ def apply_user_config_to_environment():
             os.environ[key] = value
 
 
+def sanitize_error_message(error_msg: str) -> str:
+    """Remove potential credential leaks from error messages"""
+    # List of sensitive keys that might appear in error messages
+    sensitive_keys = [
+        'AI_SERVICE_API_KEY',
+        'API_KEY',
+        'api_key',
+        'password',
+        'secret',
+        'token',
+        'credential'
+    ]
+    
+    sanitized = error_msg
+    user_config = st.session_state.get('user_config', {})
+    
+    # Replace any credential values that might appear in errors
+    for key, value in user_config.items():
+        if value and len(value) > 0:
+            # Replace the actual value with [REDACTED] if it appears in error message
+            if value in sanitized:
+                sanitized = sanitized.replace(value, f'[REDACTED_{key}]')
+            # Also check for partial matches (first/last few chars)
+            if len(value) > 8:
+                partial = value[:4] + "..." + value[-4:]
+                if partial in sanitized:
+                    sanitized = sanitized.replace(partial, f'[REDACTED_{key}]')
+    
+    return sanitized
+
+
 def check_config_required() -> Tuple[bool, List[str]]:
     """Check if required configuration is present. Returns (is_complete, missing_keys)"""
     required_keys = [
@@ -141,17 +172,37 @@ def fetch_incident_data(incident_number: str) -> Tuple[bool, str]:
         # Apply user config before running subprocess
         apply_user_config_to_environment()
         
+        # Create sanitized environment for subprocess (only pass necessary vars)
+        # This prevents accidentally passing all env vars which could leak in process lists
+        safe_env = os.environ.copy()
+        # Only pass the necessary configuration variables
+        required_env_vars = [
+            'AI_SERVICE_API_KEY',
+            'AI_SERVICE_ENDPOINT',
+            'AI_SERVICE_API_VERSION',
+            'AI_SERVICE_DEPLOYMENT_NAME',
+            'AI_SERVICE_MODEL_NAME',
+            'DATABASE_CLUSTER',
+            'DATABASE_NAME',
+            'DATABASE_TOKEN_SCOPE'
+        ]
+        # Filter to only include relevant vars (plus standard Python vars)
+        filtered_env = {k: v for k, v in safe_env.items() 
+                       if k in required_env_vars or k.startswith('PYTHON') or k in ['PATH', 'HOME', 'USER']}
+        
         with st.spinner(f"Fetching data for incident {incident_number}..."):
             fetch_proc = subprocess.run(
                 [sys.executable, "kusto_fetcher.py", str(incident_number), "--output-dir", "icms"],
                 capture_output=True,
                 text=True,
                 timeout=300,
-                env=os.environ.copy()  # Pass environment variables to subprocess
+                env=filtered_env  # Use filtered environment
             )
         
         if fetch_proc.returncode != 0:
             error_msg = f"STDOUT:\n{fetch_proc.stdout}\n\nSTDERR:\n{fetch_proc.stderr}"
+            # Sanitize error message to prevent credential leaks
+            error_msg = sanitize_error_message(error_msg)
             return False, error_msg
         
         # Check if CSV file was created
@@ -190,7 +241,9 @@ def process_incident_to_json(incident_number: str) -> Tuple[bool, str]:
             )
         
         if result.returncode != 0:
-            return False, f"Error: {result.stderr}"
+            # Sanitize error message to prevent credential leaks
+            sanitized_error = sanitize_error_message(result.stderr)
+            return False, f"Error: {sanitized_error}"
         
         json_path = os.path.join("processed_incidents", f"{incident_number}.json")
         if os.path.exists(json_path):
@@ -311,6 +364,8 @@ def process_incident_with_ai(incident_numbers: List[str], prompt_type: str, debu
         
     except Exception as e:
         error_msg = f"Error during AI processing: {str(e)}\n\n{traceback.format_exc()}"
+        # Sanitize error message to prevent credential leaks
+        error_msg = sanitize_error_message(error_msg)
         return False, {}, error_msg
 
 
