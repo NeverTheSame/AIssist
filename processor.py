@@ -378,9 +378,11 @@ class IncidentProcessor:
                 self.article_searcher = None
         
         # Initialize Azure Router client (GPT-5)
-        if not all([config.ai_service_api_key, config.ai_service_endpoint, 
-                   config.ai_service_api_version, config.ai_service_deployment_name]):
-            raise ValueError("AI Service configuration is incomplete. Please check your .env file.")
+        # Validate configuration (will refresh from environment if needed)
+        try:
+            config.validate()
+        except ValueError as e:
+            raise ValueError(f"AI Service configuration is incomplete: {e}")
         
         self.client = AzureOpenAI(
             api_key=config.ai_service_api_key,
@@ -2029,11 +2031,12 @@ def main():
         # Always use Azure Router (GPT-5)
         use_azure_router = True
         
-        # Check AI Service credentials
-        if not all([config.ai_service_api_key, config.ai_service_endpoint, 
-                   config.ai_service_api_version, config.ai_service_deployment_name]):
-            logger.error('AI Service configuration is incomplete. Please check your .env file.')
-            raise ValueError('AI Service configuration is incomplete. Please check your .env file.')
+        # Validate AI Service credentials (will refresh from environment if needed)
+        try:
+            config.validate()
+        except ValueError as e:
+            logger.error(f'AI Service configuration is incomplete: {e}')
+            raise ValueError(f'AI Service configuration is incomplete: {e}')
 
         # Initialize processor with memory support, team analysis, and article search if needed
         enable_memory = not args.no_memory

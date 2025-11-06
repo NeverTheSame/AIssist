@@ -6,7 +6,7 @@ class Config:
         # Get the project root directory
         self.root_dir = Path(__file__).parent.absolute()
         
-        # Load environment variables from .env file
+        # Load environment variables from .env file (if exists)
         self._load_env()
         
         # Initialize configuration
@@ -72,11 +72,42 @@ class Config:
         # Article Search Configuration
         self.default_vector_db_path = os.environ.get('DEFAULT_ARTICLES_EMBEDDINGS_PATH')
         
-        # Validate required configurations
-        self._validate_config()
+        # Don't validate at init - validation happens when config is actually used
+        # This allows Streamlit users to enter credentials in the UI first
+        self._validated = False
     
-    def _validate_config(self):
+    def refresh_from_environment(self):
+        """Refresh configuration values from environment variables.
+        
+        This is useful when environment variables are set after config initialization
+        (e.g., from Streamlit session state).
+        """
+        # Refresh AI Service Configuration
+        self.ai_service_api_key = os.environ.get('AI_SERVICE_API_KEY')
+        self.ai_service_endpoint = os.environ.get('AI_SERVICE_ENDPOINT')
+        self.ai_service_model_name = os.environ.get('AI_SERVICE_MODEL_NAME')
+        self.ai_service_deployment_name = os.environ.get('AI_SERVICE_DEPLOYMENT_NAME')
+        self.ai_service_api_version = os.environ.get('AI_SERVICE_API_VERSION')
+        
+        # Refresh Database Configuration
+        self.database_cluster = os.environ.get('DATABASE_CLUSTER', 'https://your-cluster.kusto.windows.net')
+        self.database_name = os.environ.get('DATABASE_NAME', 'YourDatabase')
+        self.database_token_scope = os.environ.get('DATABASE_TOKEN_SCOPE', 'https://your-cluster.kusto.windows.net/.default')
+    
+    def validate(self):
         """Validate that required configuration is present."""
+        # Refresh values from environment first (in case they were set after config init)
+        self.refresh_from_environment()
+        
+        if self._validated and all([
+            self.ai_service_api_key,
+            self.ai_service_endpoint,
+            self.ai_service_api_version,
+            self.ai_service_deployment_name,
+            self.ai_service_model_name
+        ]):
+            return  # Already validated and values are still present
+        
         # Check AI Service configuration (required)
         ai_service_config = {
             'AI_SERVICE_API_KEY': self.ai_service_api_key,
@@ -93,8 +124,15 @@ class Config:
             missing_vars = [k for k, v in ai_service_config.items() if not v]
             raise ValueError(
                 f"Missing required AI Service environment variables: {', '.join(missing_vars)}. "
-                "Please configure them in Streamlit Cloud Secrets or .env file."
+                "Please configure them in the Settings page, Streamlit Cloud Secrets, or .env file."
             )
+        
+        self._validated = True
+    
+    def _validate_config(self):
+        """Legacy method name - calls validate() for backwards compatibility"""
+        self.validate()
 
 # Create a global config instance
-config = Config() 
+# Note: Validation is deferred until config is actually used (lazy validation)
+config = Config()
