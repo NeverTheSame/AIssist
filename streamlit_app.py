@@ -16,6 +16,19 @@ import subprocess
 import traceback
 from typing import List, Dict, Any, Optional, Tuple
 
+# Optional imports for alternative data sources
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
+try:
+    from azure.storage.blob import BlobServiceClient
+    HAS_AZURE_STORAGE = True
+except ImportError:
+    HAS_AZURE_STORAGE = False
+
 # Set page config
 st.set_page_config(
     page_title="Incident Summarizer",
@@ -41,7 +54,9 @@ if 'user_config' not in st.session_state:
         'DATABASE_CLUSTER': '',
         'DATABASE_NAME': '',
         'DATABASE_TOKEN_SCOPE': '',
-        'AZURE_ACCESS_TOKEN': ''
+        'AZURE_ACCESS_TOKEN': '',
+        'KUSTO_API_URL': '',  # Local API service URL (e.g., from ngrok)
+        'AZURE_STORAGE_CONNECTION_STRING': ''  # Azure Blob Storage connection
     }
 
 
@@ -168,8 +183,67 @@ def get_prompt_descriptions() -> Dict[str, str]:
 
 
 def fetch_incident_data(incident_number: str) -> Tuple[bool, str]:
-    """Fetch incident data from database"""
+    """Fetch incident data from database
+    
+    Tries multiple methods in order:
+    1. Local API service (if KUSTO_API_URL is set)
+    2. Azure Blob Storage (if AZURE_STORAGE_CONNECTION_STRING is set)
+    3. Direct Kusto fetch (default, requires VPN)
+    """
     try:
+        # Method 1: Try Local API Service (if configured)
+        kusto_api_url = os.environ.get('KUSTO_API_URL') or st.session_state.user_config.get('KUSTO_API_URL', '')
+        if kusto_api_url:
+            if not HAS_REQUESTS:
+                return False, "requests library not installed. Install with: pip install requests"
+            
+            try:
+                api_url = f"{kusto_api_url.rstrip('/')}/fetch/{incident_number}"
+                with st.spinner(f"Fetching data from local API service for incident {incident_number}..."):
+                    response = requests.get(api_url, timeout=300)
+                    if response.status_code == 200:
+                        # Save CSV file
+                        os.makedirs("icms", exist_ok=True)
+                        incident_dir = os.path.join("icms", incident_number)
+                        os.makedirs(incident_dir, exist_ok=True)
+                        csv_path = os.path.join(incident_dir, f"{incident_number}.csv")
+                        with open(csv_path, 'wb') as f:
+                            f.write(response.content)
+                        return True, f"Successfully fetched incident {incident_number} from local API"
+                    else:
+                        error_data = response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
+                        return False, f"API returned error {response.status_code}: {error_data}"
+            except Exception as e:
+                return False, f"Local API error: {str(e)}"
+        
+        # Method 2: Try Azure Blob Storage (if configured)
+        azure_storage_conn = os.environ.get('AZURE_STORAGE_CONNECTION_STRING') or st.session_state.user_config.get('AZURE_STORAGE_CONNECTION_STRING', '')
+        if azure_storage_conn:
+            if not HAS_AZURE_STORAGE:
+                return False, "azure-storage-blob library not installed. Install with: pip install azure-storage-blob"
+            
+            try:
+                blob_service_client = BlobServiceClient.from_connection_string(azure_storage_conn)
+                container_name = os.environ.get('AZURE_STORAGE_CONTAINER', 'incident-data')
+                blob_name = f"{incident_number}/{incident_number}.csv"
+                
+                with st.spinner(f"Fetching data from Azure Blob Storage for incident {incident_number}..."):
+                    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+                    if blob_client.exists():
+                        # Download CSV file
+                        os.makedirs("icms", exist_ok=True)
+                        incident_dir = os.path.join("icms", incident_number)
+                        os.makedirs(incident_dir, exist_ok=True)
+                        csv_path = os.path.join(incident_dir, f"{incident_number}.csv")
+                        with open(csv_path, "wb") as download_file:
+                            download_file.write(blob_client.download_blob().readall())
+                        return True, f"Successfully fetched incident {incident_number} from Azure Blob Storage"
+                    else:
+                        return False, f"File not found in Azure Blob Storage: {container_name}/{blob_name}. Run azure_blob_bridge.py locally (with VPN) to upload it."
+            except Exception as e:
+                return False, f"Azure Blob Storage error: {str(e)}"
+        
+        # Method 3: Direct Kusto fetch (default, requires VPN)
         # Apply user config before running subprocess
         apply_user_config_to_environment()
         
@@ -508,8 +582,6 @@ def main():
                 label_visibility="visible"
             )
             
-            submitted_config = st.form_submit_button("💾 Save Configuration", use_container_width=True)
-            
             if submitted_config:
                 # Update session state
                 st.session_state.user_config = {
@@ -521,7 +593,9 @@ def main():
                     'DATABASE_CLUSTER': db_cluster,
                     'DATABASE_NAME': db_name,
                     'DATABASE_TOKEN_SCOPE': db_scope,
-                    'AZURE_ACCESS_TOKEN': azure_access_token
+                    'AZURE_ACCESS_TOKEN': azure_access_token,
+                    'KUSTO_API_URL': kusto_api_url,
+                    'AZURE_STORAGE_CONNECTION_STRING': azure_storage_conn
                 }
                 
                 # Apply to environment immediately
@@ -538,22 +612,62 @@ def main():
         
         # Show help for getting token (outside form)
         st.markdown("---")
-        with st.expander("📖 How to get Azure Access Token"):
-            st.markdown("""
-            **Option 1: Using Python script (easiest)**
-            ```bash
-            python3 get_azure_token.py
-            ```
+            with st.expander("📖 How to get Azure Access Token"):
+                st.markdown("""
+                **Option 1: Using Python script (easiest)**
+                ```bash
+                python3 get_azure_token.py
+                ```
+                
+                **Option 2: Using Azure CLI directly**
+                ```bash
+                az login
+                az account get-access-token --resource https://icmcluster.kusto.windows.net
+                ```
+                Then copy the `accessToken` value from the JSON output.
+                
+                **Token expires after ~1 hour.** You'll need to get a new token when it expires.
+                """)
             
-            **Option 2: Using Azure CLI directly**
-            ```bash
-            az login
-            az account get-access-token --resource https://icmcluster.kusto.windows.net
-            ```
-            Then copy the `accessToken` value from the JSON output.
+            st.markdown("---")
+            st.subheader("Alternative Data Sources (Optional)")
+            st.markdown("**Use these to avoid VPN requirements on Streamlit Cloud.**")
             
-            **Token expires after ~1 hour.** You'll need to get a new token when it expires.
-            """)
+            col7, col8 = st.columns(2)
+            
+            with col7:
+                kusto_api_url = st.text_input(
+                    "Local API URL (Option 1)",
+                    value=st.session_state.user_config.get('KUSTO_API_URL', ''),
+                    help="URL of local API service (e.g., https://xxxx.ngrok.io). See local_kusto_api.py"
+                )
+            
+            with col8:
+                azure_storage_conn = st.text_input(
+                    "Azure Blob Storage Connection (Option 2)",
+                    value=st.session_state.user_config.get('AZURE_STORAGE_CONNECTION_STRING', ''),
+                    type="password",
+                    help="Azure Storage connection string. See azure_blob_bridge.py"
+                )
+            
+            with st.expander("📖 About Alternative Data Sources"):
+                st.markdown("""
+                **Option 1: Local API Service** (Recommended for quick setup)
+                - Run `python3 local_kusto_api.py` on your machine (with VPN)
+                - Expose with `ngrok http 5000`
+                - Enter the ngrok URL above
+                - Streamlit will call your local API to fetch data
+                
+                **Option 2: Azure Blob Storage** (Recommended for automation)
+                - Run `python3 azure_blob_bridge.py <incident>` locally (with VPN)
+                - Script uploads data to Azure Blob Storage
+                - Streamlit reads from blob storage
+                - Can be automated with cron/task scheduler
+                
+                See `VPN_WORKAROUND_OPTIONS.md` for detailed setup instructions.
+                """)
+            
+            submitted_config = st.form_submit_button("💾 Save Configuration", use_container_width=True)
         
         # Show current config status
         st.markdown("---")
