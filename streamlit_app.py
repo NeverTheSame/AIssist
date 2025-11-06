@@ -503,9 +503,9 @@ def main():
             azure_access_token = st.text_area(
                 "Azure Access Token",
                 value=st.session_state.user_config.get('AZURE_ACCESS_TOKEN', ''),
-                type="password",
                 height=100,
-                help="Paste Azure access token here. Get it by running: python3 get_azure_token.py or az account get-access-token --resource https://icmcluster.kusto.windows.net"
+                help="Paste Azure access token here. Get it by running: python3 get_azure_token.py or az account get-access-token --resource https://icmcluster.kusto.windows.net",
+                label_visibility="visible"
             )
             
             submitted_config = st.form_submit_button("💾 Save Configuration", use_container_width=True)
