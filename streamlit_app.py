@@ -31,6 +31,47 @@ if 'results' not in st.session_state:
     st.session_state.results = {}
 if 'processed_incidents' not in st.session_state:
     st.session_state.processed_incidents = []
+if 'user_config' not in st.session_state:
+    st.session_state.user_config = {
+        'AI_SERVICE_API_KEY': '',
+        'AI_SERVICE_ENDPOINT': '',
+        'AI_SERVICE_API_VERSION': '',
+        'AI_SERVICE_DEPLOYMENT_NAME': '',
+        'AI_SERVICE_MODEL_NAME': '',
+        'DATABASE_CLUSTER': '',
+        'DATABASE_NAME': '',
+        'DATABASE_TOKEN_SCOPE': ''
+    }
+
+
+def apply_user_config_to_environment():
+    """Apply user configuration from session state to environment variables"""
+    user_config = st.session_state.get('user_config', {})
+    for key, value in user_config.items():
+        if value:  # Only set if value is not empty
+            os.environ[key] = value
+
+
+def check_config_required() -> Tuple[bool, List[str]]:
+    """Check if required configuration is present. Returns (is_complete, missing_keys)"""
+    required_keys = [
+        'AI_SERVICE_API_KEY',
+        'AI_SERVICE_ENDPOINT',
+        'AI_SERVICE_API_VERSION',
+        'AI_SERVICE_DEPLOYMENT_NAME',
+        'AI_SERVICE_MODEL_NAME'
+    ]
+    
+    user_config = st.session_state.get('user_config', {})
+    missing = []
+    
+    for key in required_keys:
+        # Check session state first, then environment
+        value = user_config.get(key, '') or os.environ.get(key, '')
+        if not value:
+            missing.append(key)
+    
+    return len(missing) == 0, missing
 
 
 def load_prompt_types() -> Dict[str, str]:
@@ -97,12 +138,16 @@ def get_prompt_descriptions() -> Dict[str, str]:
 def fetch_incident_data(incident_number: str) -> Tuple[bool, str]:
     """Fetch incident data from database"""
     try:
+        # Apply user config before running subprocess
+        apply_user_config_to_environment()
+        
         with st.spinner(f"Fetching data for incident {incident_number}..."):
             fetch_proc = subprocess.run(
                 [sys.executable, "kusto_fetcher.py", str(incident_number), "--output-dir", "icms"],
                 capture_output=True,
                 text=True,
-                timeout=300
+                timeout=300,
+                env=os.environ.copy()  # Pass environment variables to subprocess
             )
         
         if fetch_proc.returncode != 0:
@@ -162,12 +207,15 @@ def process_incident_to_json(incident_number: str) -> Tuple[bool, str]:
 def process_incident_with_ai(incident_numbers: List[str], prompt_type: str, debug: bool = False) -> Tuple[bool, Dict[str, Any], str]:
     """Process incident(s) with AI"""
     try:
+        # Apply user config to environment before importing
+        apply_user_config_to_environment()
+        
         # Load prompts
         from processor import IncidentProcessor, load_prompts
         
         prompts = load_prompts(prompt_type)
         
-        # Initialize processor
+        # Initialize processor (will use environment variables from session state)
         processor = IncidentProcessor(
             enable_memory=True,
             enable_team_analysis=False,
@@ -301,9 +349,17 @@ def main():
         
         page = st.radio(
             "Navigation",
-            ["Process Incident", "View Results", "Browse Files"],
+            ["⚙️ Settings", "Process Incident", "View Results", "Browse Files"],
             key="nav"
         )
+        
+        # Show config status
+        config_complete, missing = check_config_required()
+        if not config_complete:
+            st.warning("⚠️ Configuration incomplete")
+            st.caption(f"Missing: {', '.join(missing)}")
+        else:
+            st.success("✅ Configuration ready")
         
         st.markdown("---")
         st.markdown("### 📝 Quick Info")
@@ -316,8 +372,127 @@ def main():
         """)
     
     # Main content area
-    if page == "Process Incident":
+    if page == "⚙️ Settings":
+        st.header("⚙️ Configuration Settings")
+        st.markdown("Enter your credentials below. Each user should use their own values.")
+        st.markdown("---")
+        
+        with st.form("config_form"):
+            st.subheader("AI Service Configuration (Required)")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                ai_api_key = st.text_input(
+                    "AI Service API Key",
+                    value=st.session_state.user_config.get('AI_SERVICE_API_KEY', ''),
+                    type="password",
+                    help="Your AI Service API key"
+                )
+                ai_endpoint = st.text_input(
+                    "AI Service Endpoint",
+                    value=st.session_state.user_config.get('AI_SERVICE_ENDPOINT', ''),
+                    help="Your AI Service endpoint URL"
+                )
+                ai_api_version = st.text_input(
+                    "AI Service API Version",
+                    value=st.session_state.user_config.get('AI_SERVICE_API_VERSION', ''),
+                    help="API version (e.g., 2024-02-15-preview)"
+                )
+            
+            with col2:
+                ai_deployment_name = st.text_input(
+                    "AI Service Deployment Name",
+                    value=st.session_state.user_config.get('AI_SERVICE_DEPLOYMENT_NAME', ''),
+                    help="Your deployment name"
+                )
+                ai_model_name = st.text_input(
+                    "AI Service Model Name",
+                    value=st.session_state.user_config.get('AI_SERVICE_MODEL_NAME', ''),
+                    help="Model name (e.g., gpt-5)"
+                )
+            
+            st.markdown("---")
+            st.subheader("Database Configuration (Optional)")
+            st.markdown("Only needed if you want to fetch incidents from database")
+            
+            col3, col4 = st.columns(2)
+            
+            with col3:
+                db_cluster = st.text_input(
+                    "Database Cluster",
+                    value=st.session_state.user_config.get('DATABASE_CLUSTER', ''),
+                    help="Kusto cluster URL"
+                )
+                db_name = st.text_input(
+                    "Database Name",
+                    value=st.session_state.user_config.get('DATABASE_NAME', ''),
+                    help="Database name"
+                )
+            
+            with col4:
+                db_scope = st.text_input(
+                    "Database Token Scope",
+                    value=st.session_state.user_config.get('DATABASE_TOKEN_SCOPE', ''),
+                    help="Token scope URL"
+                )
+            
+            submitted_config = st.form_submit_button("💾 Save Configuration", use_container_width=True)
+            
+            if submitted_config:
+                # Update session state
+                st.session_state.user_config = {
+                    'AI_SERVICE_API_KEY': ai_api_key,
+                    'AI_SERVICE_ENDPOINT': ai_endpoint,
+                    'AI_SERVICE_API_VERSION': ai_api_version,
+                    'AI_SERVICE_DEPLOYMENT_NAME': ai_deployment_name,
+                    'AI_SERVICE_MODEL_NAME': ai_model_name,
+                    'DATABASE_CLUSTER': db_cluster,
+                    'DATABASE_NAME': db_name,
+                    'DATABASE_TOKEN_SCOPE': db_scope
+                }
+                
+                # Apply to environment immediately
+                apply_user_config_to_environment()
+                
+                # Validate
+                config_complete, missing = check_config_required()
+                if config_complete:
+                    st.success("✅ Configuration saved successfully!")
+                    st.info("You can now use the 'Process Incident' page.")
+                else:
+                    st.error(f"❌ Missing required fields: {', '.join(missing)}")
+                    st.warning("Please fill in all required AI Service fields.")
+        
+        # Show current config status
+        st.markdown("---")
+        with st.expander("📋 Configuration Status"):
+            config_complete, missing = check_config_required()
+            if config_complete:
+                st.success("✅ All required configuration is present")
+                st.json({
+                    k: "✓ Set" if v else "✗ Not set" 
+                    for k, v in st.session_state.user_config.items()
+                })
+            else:
+                st.error(f"❌ Missing required fields: {', '.join(missing)}")
+                st.json({
+                    k: "✓ Set" if v else "✗ Not set" 
+                    for k, v in st.session_state.user_config.items()
+                })
+    
+    elif page == "Process Incident":
         st.header("🔍 Process Incident")
+        
+        # Check configuration first
+        config_complete, missing = check_config_required()
+        if not config_complete:
+            st.error(f"❌ Configuration incomplete. Missing: {', '.join(missing)}")
+            st.warning("⚠️ Please go to **⚙️ Settings** page and enter your credentials first.")
+            if st.button("Go to Settings"):
+                st.session_state.nav = "⚙️ Settings"
+                st.rerun()
+            return
         
         # Get available prompt types
         prompt_types = load_prompt_types()
