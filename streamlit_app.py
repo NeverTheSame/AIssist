@@ -508,23 +508,6 @@ def main():
                 help="Paste Azure access token here. Get it by running: python3 get_azure_token.py or az account get-access-token --resource https://icmcluster.kusto.windows.net"
             )
             
-            with st.expander("📖 How to get Azure Access Token"):
-                st.markdown("""
-                **Option 1: Using Python script (easiest)**
-                ```bash
-                python3 get_azure_token.py
-                ```
-                
-                **Option 2: Using Azure CLI directly**
-                ```bash
-                az login
-                az account get-access-token --resource https://icmcluster.kusto.windows.net
-                ```
-                Then copy the `accessToken` value from the JSON output.
-                
-                **Token expires after ~1 hour.** You'll need to get a new token when it expires.
-                """)
-            
             submitted_config = st.form_submit_button("💾 Save Configuration", use_container_width=True)
             
             if submitted_config:
@@ -552,6 +535,25 @@ def main():
                 else:
                     st.error(f"❌ Missing required fields: {', '.join(missing)}")
                     st.warning("Please fill in all required AI Service fields.")
+        
+        # Show help for getting token (outside form)
+        st.markdown("---")
+        with st.expander("📖 How to get Azure Access Token"):
+            st.markdown("""
+            **Option 1: Using Python script (easiest)**
+            ```bash
+            python3 get_azure_token.py
+            ```
+            
+            **Option 2: Using Azure CLI directly**
+            ```bash
+            az login
+            az account get-access-token --resource https://icmcluster.kusto.windows.net
+            ```
+            Then copy the `accessToken` value from the JSON output.
+            
+            **Token expires after ~1 hour.** You'll need to get a new token when it expires.
+            """)
         
         # Show current config status
         st.markdown("---")
