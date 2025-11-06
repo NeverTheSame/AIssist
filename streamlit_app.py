@@ -41,6 +41,7 @@ if 'user_config' not in st.session_state:
         'DATABASE_CLUSTER': '',
         'DATABASE_NAME': '',
         'DATABASE_TOKEN_SCOPE': '',
+        'AZURE_ACCESS_TOKEN': '',
         'AZURE_CLIENT_ID': '',
         'AZURE_CLIENT_SECRET': '',
         'AZURE_TENANT_ID': ''
@@ -188,6 +189,8 @@ def fetch_incident_data(incident_number: str) -> Tuple[bool, str]:
             'DATABASE_CLUSTER',
             'DATABASE_NAME',
             'DATABASE_TOKEN_SCOPE',
+            'AZURE_ACCESS_TOKEN',  # Direct token (preferred method)
+            'DATABASE_ACCESS_TOKEN',  # Alternative name
             'AZURE_CLIENT_ID',
             'AZURE_CLIENT_SECRET',
             'AZURE_TENANT_ID',
@@ -502,8 +505,42 @@ def main():
                 )
             
             st.markdown("---")
-            st.subheader("Azure Authentication (Optional, for Database Access)")
-            st.markdown("**Required for fetching incidents from database.** If not set, will try other authentication methods.")
+            st.subheader("Azure Authentication (for Database Access)")
+            st.markdown("**Required for fetching incidents from database.**")
+            
+            # Method 1: Direct Token Input (RECOMMENDED - easiest, no enterprise app needed)
+            st.markdown("#### Method 1: Direct Token (Recommended) ✅")
+            st.markdown("**No enterprise app creation needed!** Get token using Azure CLI on your local machine.")
+            
+            azure_access_token = st.text_area(
+                "Azure Access Token",
+                value=st.session_state.user_config.get('AZURE_ACCESS_TOKEN', ''),
+                type="password",
+                height=100,
+                help="Paste Azure access token here. Get it by running: python3 get_azure_token.py or az account get-access-token --resource https://your-cluster.kusto.windows.net/.default"
+            )
+            
+            with st.expander("📖 How to get Azure Access Token"):
+                st.markdown("""
+                **Option 1: Using Python script (easiest)**
+                ```bash
+                python3 get_azure_token.py
+                ```
+                
+                **Option 2: Using Azure CLI directly**
+                ```bash
+                az login
+                az account get-access-token --resource https://icmcluster.kusto.windows.net/.default
+                ```
+                Then copy the `accessToken` value from the JSON output.
+                
+                **Token expires after ~1 hour.** You'll need to get a new token when it expires.
+                """)
+            
+            # Method 2: Service Principal (Alternative - requires enterprise app)
+            st.markdown("---")
+            st.markdown("#### Method 2: Service Principal (Alternative)")
+            st.markdown("*Requires creating an enterprise application in Azure AD. Only use if you have permissions to create apps.*")
             
             col5, col6 = st.columns(2)
             
@@ -511,7 +548,7 @@ def main():
                 azure_client_id = st.text_input(
                     "Azure Client ID",
                     value=st.session_state.user_config.get('AZURE_CLIENT_ID', ''),
-                    help="Service Principal Client ID (for non-interactive auth)"
+                    help="Service Principal Client ID"
                 )
                 azure_tenant_id = st.text_input(
                     "Azure Tenant ID",
@@ -524,9 +561,9 @@ def main():
                     "Azure Client Secret",
                     value=st.session_state.user_config.get('AZURE_CLIENT_SECRET', ''),
                     type="password",
-                    help="Service Principal Client Secret (for non-interactive auth)"
+                    help="Service Principal Client Secret"
                 )
-                st.info("💡 **Tip:** Service Principal authentication is required for server deployments (like Streamlit Cloud). Device Code or Interactive Browser auth won't work.")
+                st.info("💡 **Direct Token (Method 1) is easier and doesn't require enterprise app creation!**")
             
             submitted_config = st.form_submit_button("💾 Save Configuration", use_container_width=True)
             
@@ -541,6 +578,7 @@ def main():
                     'DATABASE_CLUSTER': db_cluster,
                     'DATABASE_NAME': db_name,
                     'DATABASE_TOKEN_SCOPE': db_scope,
+                    'AZURE_ACCESS_TOKEN': azure_access_token,
                     'AZURE_CLIENT_ID': azure_client_id,
                     'AZURE_CLIENT_SECRET': azure_client_secret,
                     'AZURE_TENANT_ID': azure_tenant_id
