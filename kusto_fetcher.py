@@ -52,106 +52,32 @@ def _save_token_to_cache(token, expires_at):
         print(f"Warning: Could not save token to cache: {e}")
 
 def _get_valid_token():
-    """Get a valid token, using cached token if not expired.
+    """Get a valid token - only supports direct token input.
     
-    Authentication methods in order of preference:
-    1. Direct token input (AZURE_ACCESS_TOKEN) - SIMPLEST, recommended
-    2. Service Principal (if AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID are set)
-    3. Managed Identity (if running on Azure)
-    4. DefaultAzureCredential (tries multiple methods automatically)
+    Token must be provided via AZURE_ACCESS_TOKEN or DATABASE_ACCESS_TOKEN environment variable.
+    Get token by running: python3 get_azure_token.py
     """
-    # Method 1: Direct token input (SIMPLEST - no enterprise app needed!)
+    # Direct token input (ONLY method - no enterprise app needed!)
     access_token = os.environ.get('AZURE_ACCESS_TOKEN') or os.environ.get('DATABASE_ACCESS_TOKEN')
     if access_token:
         print("Using provided Azure access token")
         return access_token.strip()
     
-    # Try to load from cache first (only if no direct token provided)
+    # Try to load from cache as fallback
     cached_token = _load_cached_token()
     if cached_token:
         print("Using cached authentication token")
         return cached_token
     
-    # Get new token using other methods
-    print("Authenticating with Azure...")
-    
-    # Get token scope from config
-    token_scope = config.database_token_scope
-    
-    # Try authentication methods in order of preference
-    credential = None
-    auth_method = None
-    
-    # Method 2: Service Principal (if credentials provided)
-    client_id = os.environ.get('AZURE_CLIENT_ID') or os.environ.get('DATABASE_CLIENT_ID')
-    client_secret = os.environ.get('AZURE_CLIENT_SECRET') or os.environ.get('DATABASE_CLIENT_SECRET')
-    tenant_id = os.environ.get('AZURE_TENANT_ID') or os.environ.get('DATABASE_TENANT_ID')
-    
-    if client_id and client_secret and tenant_id:
-        try:
-            print("Attempting Service Principal authentication...")
-            credential = ClientSecretCredential(tenant_id, client_id, client_secret)
-            auth_method = "Service Principal"
-        except Exception as e:
-            print(f"Service Principal authentication failed: {e}")
-            credential = None
-    
-    # Method 3: Managed Identity (if running on Azure)
-    if not credential:
-        try:
-            print("Attempting Managed Identity authentication...")
-            credential = ManagedIdentityCredential()
-            auth_method = "Managed Identity"
-            # Test if it works by trying to get a token
-            credential.get_token(token_scope)
-        except Exception as e:
-            print(f"Managed Identity authentication not available: {e}")
-            credential = None
-    
-    # Method 4: DefaultAzureCredential (tries multiple methods automatically)
-    if not credential:
-        try:
-            print("Attempting DefaultAzureCredential (tries multiple methods)...")
-            credential = DefaultAzureCredential()
-            auth_method = "DefaultAzureCredential"
-            # Test if it works
-            credential.get_token(token_scope)
-        except Exception as e:
-            print(f"DefaultAzureCredential failed: {e}")
-            credential = None
-    
-    if not credential:
-        raise ValueError(
-            "No authentication method available. Please use one of:\n"
-            "1. DIRECT TOKEN (Recommended - no enterprise app needed):\n"
-            "   - Run: python3 get_azure_token.py\n"
-            "   - Or: az account get-access-token --resource https://your-cluster.kusto.windows.net/.default\n"
-            "   - Copy token to Settings page → 'Azure Access Token' field\n"
-            "2. Service Principal (requires enterprise app):\n"
-            "   - Set AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID in Settings page"
-        )
-    
-    print(f"Using {auth_method} authentication...")
-    
-    try:
-        token_response = credential.get_token(token_scope)
-        token = token_response.token
-        expires_at = token_response.expires_on
-        
-        # Save to cache
-        _save_token_to_cache(token, expires_at)
-        print(f"Authentication successful using {auth_method} - token cached for future use")
-        
-        return token
-    except Exception as e:
-        error_msg = str(e)
-        if "Failed to open a browser" in error_msg:
-            raise ValueError(
-                "Browser-based authentication is not available. Use direct token input instead:\n"
-                "1. Run: python3 get_azure_token.py\n"
-                "2. Copy the token to Settings page → 'Azure Access Token' field"
-            )
-        raise
+    # No token available
+    raise ValueError(
+        "Azure access token is required. Please:\n"
+        "1. Run: python3 get_azure_token.py\n"
+        "   Or: az account get-access-token --resource https://icmcluster.kusto.windows.net\n"
+        "2. Copy the token to Settings page → 'Azure Access Token' field\n"
+        "3. Click 'Save Configuration'\n\n"
+        "Token expires after ~1 hour. Get a new token when it expires."
+    )
 
 def download_screenshot_from_data_url(data_url, output_path):
     """
