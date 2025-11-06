@@ -1,0 +1,8 @@
+cluster('icmcluster.kusto.windows.net').database('IcMDataWarehouse').table('IncidentDescriptions') 
+| where IncidentId in ("{incident_number}")
+| project Date, ChangedBy, Text
+
+cluster('icmcluster.kusto.windows.net').database('IcMDataWarehouse').table('Incidents')
+| where IncidentId == "{incident_number}"
+| top 1 by ModifiedDate desc
+| project Summary
