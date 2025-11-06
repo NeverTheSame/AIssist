@@ -5,7 +5,15 @@ import time
 import json
 import base64
 import requests
-from azure.identity import InteractiveBrowserCredential
+from azure.identity import (
+    InteractiveBrowserCredential,
+    DeviceCodeCredential,
+    ManagedIdentityCredential,
+    ClientSecretCredential,
+    DefaultAzureCredential,
+    ChainedTokenCredential,
+    EnvironmentCredential
+)
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 import re
 from azure.kusto.data.exceptions import KustoNetworkError
@@ -44,7 +52,15 @@ def _save_token_to_cache(token, expires_at):
         print(f"Warning: Could not save token to cache: {e}")
 
 def _get_valid_token():
-    """Get a valid token, using cached token if not expired."""
+    """Get a valid token, using cached token if not expired.
+    
+    Supports multiple authentication methods in order of preference:
+    1. Service Principal (if AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID are set)
+    2. Managed Identity (if running on Azure)
+    3. DefaultAzureCredential (tries multiple methods automatically)
+    4. Device Code Flow (for server environments without browser)
+    5. Interactive Browser (last resort, for local development only)
+    """
     # Try to load from cache first
     cached_token = _load_cached_token()
     if cached_token:
@@ -53,19 +69,104 @@ def _get_valid_token():
     
     # Get new token
     print("Authenticating with Azure...")
-    credential = InteractiveBrowserCredential()
     
     # Get token scope from config
     token_scope = config.database_token_scope
-    token_response = credential.get_token(token_scope)
-    token = token_response.token
-    expires_at = token_response.expires_on
     
-    # Save to cache
-    _save_token_to_cache(token, expires_at)
-    print("Authentication successful - token cached for future use")
+    # Try authentication methods in order of preference
+    credential = None
+    auth_method = None
     
-    return token
+    # Method 1: Service Principal (best for server deployments)
+    client_id = os.environ.get('AZURE_CLIENT_ID') or os.environ.get('DATABASE_CLIENT_ID')
+    client_secret = os.environ.get('AZURE_CLIENT_SECRET') or os.environ.get('DATABASE_CLIENT_SECRET')
+    tenant_id = os.environ.get('AZURE_TENANT_ID') or os.environ.get('DATABASE_TENANT_ID')
+    
+    if client_id and client_secret and tenant_id:
+        try:
+            print("Attempting Service Principal authentication...")
+            credential = ClientSecretCredential(tenant_id, client_id, client_secret)
+            auth_method = "Service Principal"
+        except Exception as e:
+            print(f"Service Principal authentication failed: {e}")
+            credential = None
+    
+    # Method 2: Managed Identity (if running on Azure)
+    if not credential:
+        try:
+            print("Attempting Managed Identity authentication...")
+            credential = ManagedIdentityCredential()
+            auth_method = "Managed Identity"
+            # Test if it works by trying to get a token
+            credential.get_token(token_scope)
+        except Exception as e:
+            print(f"Managed Identity authentication not available: {e}")
+            credential = None
+    
+    # Method 3: DefaultAzureCredential (tries multiple methods automatically)
+    if not credential:
+        try:
+            print("Attempting DefaultAzureCredential (tries multiple methods)...")
+            credential = DefaultAzureCredential()
+            auth_method = "DefaultAzureCredential"
+            # Test if it works
+            credential.get_token(token_scope)
+        except Exception as e:
+            print(f"DefaultAzureCredential failed: {e}")
+            credential = None
+    
+    # Method 4: Device Code Flow (for server environments)
+    if not credential:
+        try:
+            print("Attempting Device Code authentication (for server environments)...")
+            # Device code flow prints a code to console, user enters it in browser
+            credential = DeviceCodeCredential()
+            auth_method = "Device Code"
+        except Exception as e:
+            print(f"Device Code authentication failed: {e}")
+            credential = None
+    
+    # Method 5: Interactive Browser (last resort, for local development)
+    if not credential:
+        try:
+            print("Attempting Interactive Browser authentication (local development only)...")
+            credential = InteractiveBrowserCredential()
+            auth_method = "Interactive Browser"
+        except Exception as e:
+            print(f"Interactive Browser authentication failed: {e}")
+            credential = None
+    
+    if not credential:
+        raise ValueError(
+            "Failed to initialize any Azure authentication method. "
+            "For server deployments, set AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, and AZURE_TENANT_ID "
+            "in the Settings page or as environment variables."
+        )
+    
+    print(f"Using {auth_method} authentication...")
+    
+    try:
+        token_response = credential.get_token(token_scope)
+        token = token_response.token
+        expires_at = token_response.expires_on
+        
+        # Save to cache
+        _save_token_to_cache(token, expires_at)
+        print(f"Authentication successful using {auth_method} - token cached for future use")
+        
+        return token
+    except Exception as e:
+        error_msg = str(e)
+        if "Failed to open a browser" in error_msg:
+            raise ValueError(
+                "Browser-based authentication is not available in this environment. "
+                "Please use Service Principal authentication by setting:\n"
+                "- AZURE_CLIENT_ID (or DATABASE_CLIENT_ID)\n"
+                "- AZURE_CLIENT_SECRET (or DATABASE_CLIENT_SECRET)\n"
+                "- AZURE_TENANT_ID (or DATABASE_TENANT_ID)\n"
+                "You can enter these in the Settings page of the Streamlit app."
+            )
+        raise
 
 def download_screenshot_from_data_url(data_url, output_path):
     """

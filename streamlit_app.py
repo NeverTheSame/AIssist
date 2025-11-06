@@ -40,7 +40,10 @@ if 'user_config' not in st.session_state:
         'AI_SERVICE_MODEL_NAME': '',
         'DATABASE_CLUSTER': '',
         'DATABASE_NAME': '',
-        'DATABASE_TOKEN_SCOPE': ''
+        'DATABASE_TOKEN_SCOPE': '',
+        'AZURE_CLIENT_ID': '',
+        'AZURE_CLIENT_SECRET': '',
+        'AZURE_TENANT_ID': ''
     }
 
 
@@ -184,7 +187,13 @@ def fetch_incident_data(incident_number: str) -> Tuple[bool, str]:
             'AI_SERVICE_MODEL_NAME',
             'DATABASE_CLUSTER',
             'DATABASE_NAME',
-            'DATABASE_TOKEN_SCOPE'
+            'DATABASE_TOKEN_SCOPE',
+            'AZURE_CLIENT_ID',
+            'AZURE_CLIENT_SECRET',
+            'AZURE_TENANT_ID',
+            'DATABASE_CLIENT_ID',  # Alternative names
+            'DATABASE_CLIENT_SECRET',
+            'DATABASE_TENANT_ID'
         ]
         # Filter to only include relevant vars (plus standard Python vars)
         filtered_env = {k: v for k, v in safe_env.items() 
@@ -492,6 +501,33 @@ def main():
                     help="Token scope URL"
                 )
             
+            st.markdown("---")
+            st.subheader("Azure Authentication (Optional, for Database Access)")
+            st.markdown("**Required for fetching incidents from database.** If not set, will try other authentication methods.")
+            
+            col5, col6 = st.columns(2)
+            
+            with col5:
+                azure_client_id = st.text_input(
+                    "Azure Client ID",
+                    value=st.session_state.user_config.get('AZURE_CLIENT_ID', ''),
+                    help="Service Principal Client ID (for non-interactive auth)"
+                )
+                azure_tenant_id = st.text_input(
+                    "Azure Tenant ID",
+                    value=st.session_state.user_config.get('AZURE_TENANT_ID', ''),
+                    help="Azure AD Tenant ID"
+                )
+            
+            with col6:
+                azure_client_secret = st.text_input(
+                    "Azure Client Secret",
+                    value=st.session_state.user_config.get('AZURE_CLIENT_SECRET', ''),
+                    type="password",
+                    help="Service Principal Client Secret (for non-interactive auth)"
+                )
+                st.info("💡 **Tip:** Service Principal authentication is required for server deployments (like Streamlit Cloud). Device Code or Interactive Browser auth won't work.")
+            
             submitted_config = st.form_submit_button("💾 Save Configuration", use_container_width=True)
             
             if submitted_config:
@@ -504,7 +540,10 @@ def main():
                     'AI_SERVICE_MODEL_NAME': ai_model_name,
                     'DATABASE_CLUSTER': db_cluster,
                     'DATABASE_NAME': db_name,
-                    'DATABASE_TOKEN_SCOPE': db_scope
+                    'DATABASE_TOKEN_SCOPE': db_scope,
+                    'AZURE_CLIENT_ID': azure_client_id,
+                    'AZURE_CLIENT_SECRET': azure_client_secret,
+                    'AZURE_TENANT_ID': azure_tenant_id
                 }
                 
                 # Apply to environment immediately
