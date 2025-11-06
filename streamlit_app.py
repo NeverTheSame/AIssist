@@ -593,120 +593,234 @@ def main():
             st.error("No prompt types available. Please ensure prompts.json exists.")
             return
         
-        with st.form("incident_form"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                incident_input = st.text_area(
-                    "Incident ID(s)",
-                    help="Enter one or more incident IDs, separated by commas or spaces",
-                    height=100
-                )
-            
-            with col2:
-                prompt_type = st.selectbox(
-                    "Prompt Type",
-                    options=list(prompt_types.keys()),
-                    format_func=lambda x: prompt_descriptions.get(x, x),
-                    help="Select the type of analysis to perform"
-                )
-            
-            debug_mode = st.checkbox("Enable Debug Mode", value=False)
-            
-            submitted = st.form_submit_button("🚀 Process Incident", use_container_width=True)
+        # Two tabs: Fetch from database or Upload CSV file
+        tab1, tab2 = st.tabs(["📥 Fetch from Database", "📤 Upload CSV File"])
         
-        if submitted:
-            if not incident_input.strip():
-                st.error("Please enter at least one incident ID")
-                return
+        with tab1:
+            st.info("⚠️ **Note:** Database fetching requires VPN connection. If you get network errors, use the 'Upload CSV File' tab instead.")
             
-            # Parse incident IDs
-            incident_ids = [id.strip() for id in re.split(r'[,\s]+', incident_input) if id.strip()]
+            with st.form("incident_form"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    incident_input = st.text_area(
+                        "Incident ID(s)",
+                        help="Enter one or more incident IDs, separated by commas or spaces",
+                        height=100
+                    )
+                
+                with col2:
+                    prompt_type = st.selectbox(
+                        "Prompt Type",
+                        options=list(prompt_types.keys()),
+                        format_func=lambda x: prompt_descriptions.get(x, x),
+                        help="Select the type of analysis to perform"
+                    )
+                
+                debug_mode = st.checkbox("Enable Debug Mode", value=False)
+                
+                submitted = st.form_submit_button("🚀 Process Incident", use_container_width=True)
+        
+        with tab2:
+            st.markdown("""
+            ### Upload Incident CSV File
             
-            if not incident_ids:
-                st.error("No valid incident IDs found")
-                return
+            **Use this method if database fetching fails due to VPN requirements.**
             
-            # Initialize progress tracking
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            results_container = st.container()
+            1. **Fetch data locally** (on your machine with VPN connected):
+               ```bash
+               python3 kusto_fetcher.py 703150410
+               ```
+            2. **Find the CSV file** at: `icms/703150410/703150410.csv`
+            3. **Upload it below** and process it in the cloud app.
+            """)
             
-            total_steps = len(incident_ids) * 3  # fetch, transform, AI for each
-            current_step = 0
+            uploaded_file = st.file_uploader(
+                "Choose CSV file",
+                type=['csv'],
+                help="Upload a CSV file from icms/ folder (fetched locally with VPN)"
+            )
             
-            try:
-                successful_incidents = []
-                
-                # Step 1: Fetch data
-                status_text.text("📥 Step 1/3: Fetching incident data from database...")
-                for incident_id in incident_ids:
-                    success, message = fetch_incident_data(incident_id)
-                    current_step += 1
-                    progress_bar.progress(current_step / total_steps)
-                    
-                    if success:
-                        successful_incidents.append(incident_id)
-                        st.success(f"✅ Fetched incident {incident_id}")
-                    else:
-                        st.error(f"❌ Failed to fetch incident {incident_id}: {message}")
-                
-                if not successful_incidents:
-                    st.error("No incidents were successfully fetched. Please check your VPN connection and try again.")
-                    return
-                
-                # Step 2: Process to JSON
-                status_text.text("🔄 Step 2/3: Converting CSV to JSON...")
-                processed_incidents = []
-                for incident_id in successful_incidents:
-                    success, message = process_incident_to_json(incident_id)
-                    current_step += 1
-                    progress_bar.progress(current_step / total_steps)
-                    
-                    if success:
-                        processed_incidents.append(incident_id)
-                        st.success(f"✅ Processed incident {incident_id}")
-                    else:
-                        st.warning(f"⚠️ Failed to process incident {incident_id}: {message}")
-                
-                if not processed_incidents:
-                    st.error("No incidents were successfully processed.")
-                    return
-                
-                # Step 3: AI Processing
-                status_text.text("🤖 Step 3/3: Generating AI summary...")
-                success, results, message = process_incident_with_ai(
-                    processed_incidents,
-                    prompt_type,
-                    debug_mode
-                )
-                
-                current_step = total_steps
-                progress_bar.progress(1.0)
-                
-                if success:
-                    status_text.text("✅ Processing completed!")
-                    st.session_state.results = results
-                    st.session_state.processed_incidents = processed_incidents
-                    
-                    # Display results
-                    with results_container:
-                        st.success("🎉 Processing completed successfully!")
-                        st.markdown("---")
-                        st.subheader("📋 Results")
-                        
-                        for incident_id, result in results.items():
-                            with st.expander(f"Incident {incident_id} - {prompt_type}", expanded=True):
-                                st.markdown("### Summary")
-                                st.markdown(result['summary'])
-                                st.caption(f"Generated at: {result['timestamp']}")
+            if uploaded_file is not None:
+                # Get incident number from filename
+                filename = uploaded_file.name
+                # Extract incident number from filename (e.g., "703150410.csv" or "icms/703150410/703150410.csv")
+                incident_match = re.search(r'(\d+)', filename)
+                if incident_match:
+                    incident_number = incident_match.group(1)
                 else:
-                    st.error(f"❌ AI Processing failed: {message}")
-                    st.code(message, language='text')
-            
-            except Exception as e:
-                st.error(f"❌ Error during processing: {str(e)}")
-                st.code(traceback.format_exc(), language='text')
+                    st.error("Could not extract incident number from filename. Please name the file with the incident number (e.g., 703150410.csv)")
+                    st.stop()
+                
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    prompt_type_upload = st.selectbox(
+                        "Prompt Type",
+                        options=list(prompt_types.keys()),
+                        format_func=lambda x: prompt_descriptions.get(x, x),
+                        help="Select the type of analysis to perform",
+                        key="prompt_type_upload"
+                    )
+                
+                with col2:
+                    debug_mode_upload = st.checkbox("Enable Debug Mode", value=False, key="debug_upload")
+                
+                if st.button("🚀 Process Uploaded File", use_container_width=True, type="primary"):
+                    # Save uploaded file to icms directory
+                    os.makedirs("icms", exist_ok=True)
+                    incident_dir = os.path.join("icms", incident_number)
+                    os.makedirs(incident_dir, exist_ok=True)
+                    
+                    csv_path = os.path.join(incident_dir, f"{incident_number}.csv")
+                    
+                    # Save uploaded file
+                    with open(csv_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    
+                    st.success(f"✅ File saved to {csv_path}")
+                    
+                    # Process the file
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    try:
+                        # Step 1: Process CSV to JSON
+                        status_text.text("🔄 Step 1/2: Converting CSV to JSON...")
+                        progress_bar.progress(0.3)
+                        
+                        success, message = process_incident_to_json(incident_number)
+                        if not success:
+                            st.error(f"❌ Failed to process CSV: {message}")
+                            st.stop()
+                        
+                        progress_bar.progress(0.6)
+                        st.success(f"✅ {message}")
+                        
+                        # Step 2: AI Processing
+                        status_text.text("🤖 Step 2/2: Generating AI summary...")
+                        success, results, message = process_incident_with_ai(
+                            [incident_number],
+                            prompt_type_upload,
+                            debug_mode_upload
+                        )
+                        
+                        progress_bar.progress(1.0)
+                        
+                        if success:
+                            status_text.text("✅ Processing completed!")
+                            st.success("🎉 Processing completed successfully!")
+                            st.markdown("---")
+                            st.subheader("📋 Results")
+                            
+                            for inc_id, result in results.items():
+                                with st.expander(f"Incident {inc_id} - {prompt_type_upload}", expanded=True):
+                                    st.markdown("### Summary")
+                                    st.markdown(result['summary'])
+                                    st.caption(f"Generated at: {result['timestamp']}")
+                        else:
+                            st.error(f"❌ AI Processing failed: {message}")
+                            st.code(message, language='text')
+                    
+                    except Exception as e:
+                        st.error(f"❌ Error during processing: {str(e)}")
+                        st.code(traceback.format_exc(), language='text')
+        
+            # Process form submission for database fetching (from tab1)
+            if submitted:
+                if not incident_input.strip():
+                    st.error("Please enter at least one incident ID")
+                    return
+                
+                # Parse incident IDs
+                incident_ids = [id.strip() for id in re.split(r'[,\s]+', incident_input) if id.strip()]
+                
+                if not incident_ids:
+                    st.error("No valid incident IDs found")
+                    return
+                
+                # Initialize progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                results_container = st.container()
+                
+                total_steps = len(incident_ids) * 3  # fetch, transform, AI for each
+                current_step = 0
+                
+                try:
+                    successful_incidents = []
+                    
+                    # Step 1: Fetch data
+                    status_text.text("📥 Step 1/3: Fetching incident data from database...")
+                    for incident_id in incident_ids:
+                        success, message = fetch_incident_data(incident_id)
+                        current_step += 1
+                        progress_bar.progress(current_step / total_steps)
+                        
+                        if success:
+                            successful_incidents.append(incident_id)
+                            st.success(f"✅ Fetched incident {incident_id}")
+                        else:
+                            st.error(f"❌ Failed to fetch incident {incident_id}: {message}")
+                            st.info("💡 **Tip:** If you see VPN/network errors, use the 'Upload CSV File' tab to upload data fetched locally.")
+                    
+                    if not successful_incidents:
+                        st.error("No incidents were successfully fetched. Please check your VPN connection and try again.")
+                        st.info("💡 **Workaround:** Use the 'Upload CSV File' tab to upload data fetched locally with VPN.")
+                        return
+                    
+                    # Step 2: Process to JSON
+                    status_text.text("🔄 Step 2/3: Converting CSV to JSON...")
+                    processed_incidents = []
+                    for incident_id in successful_incidents:
+                        success, message = process_incident_to_json(incident_id)
+                        current_step += 1
+                        progress_bar.progress(current_step / total_steps)
+                        
+                        if success:
+                            processed_incidents.append(incident_id)
+                            st.success(f"✅ Processed incident {incident_id}")
+                        else:
+                            st.warning(f"⚠️ Failed to process incident {incident_id}: {message}")
+                    
+                    if not processed_incidents:
+                        st.error("No incidents were successfully processed.")
+                        return
+                    
+                    # Step 3: AI Processing
+                    status_text.text("🤖 Step 3/3: Generating AI summary...")
+                    success, results, message = process_incident_with_ai(
+                        processed_incidents,
+                        prompt_type,
+                        debug_mode
+                    )
+                    
+                    current_step = total_steps
+                    progress_bar.progress(1.0)
+                    
+                    if success:
+                        status_text.text("✅ Processing completed!")
+                        st.session_state.results = results
+                        st.session_state.processed_incidents = processed_incidents
+                        
+                        # Display results
+                        with results_container:
+                            st.success("🎉 Processing completed successfully!")
+                            st.markdown("---")
+                            st.subheader("📋 Results")
+                            
+                            for incident_id, result in results.items():
+                                with st.expander(f"Incident {incident_id} - {prompt_type}", expanded=True):
+                                    st.markdown("### Summary")
+                                    st.markdown(result['summary'])
+                                    st.caption(f"Generated at: {result['timestamp']}")
+                    else:
+                        st.error(f"❌ AI Processing failed: {message}")
+                        st.code(message, language='text')
+                
+                except Exception as e:
+                    st.error(f"❌ Error during processing: {str(e)}")
+                    st.code(traceback.format_exc(), language='text')
     
     elif page == "View Results":
         st.header("📊 View Results")
