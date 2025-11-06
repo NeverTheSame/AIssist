@@ -5,15 +5,7 @@ import time
 import json
 import base64
 import requests
-from azure.identity import (
-    InteractiveBrowserCredential,
-    DeviceCodeCredential,
-    ManagedIdentityCredential,
-    ClientSecretCredential,
-    DefaultAzureCredential,
-    ChainedTokenCredential,
-    EnvironmentCredential
-)
+# Token-based authentication only - no Azure identity imports needed
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 import re
 from azure.kusto.data.exceptions import KustoNetworkError
