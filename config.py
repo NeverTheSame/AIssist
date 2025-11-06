@@ -13,34 +13,39 @@ class Config:
         self._init_config()
     
     def _load_env(self):
-        """Load environment variables from .env file."""
-        env_path = self.root_dir / '.env'
-        if not env_path.exists():
-            raise FileNotFoundError(
-                f".env file not found at {env_path}. "
-                "Please create a .env file with your configuration."
-            )
+        """Load environment variables from .env file (if exists) or use existing env vars.
         
-        # Read and parse .env file
-        with open(env_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                # Skip empty lines and comments
-                if not line or line.startswith('#'):
-                    continue
-                
-                # Split on first '=' only
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip()
+        On Streamlit Cloud, environment variables come from Secrets, so we only
+        load from .env file if it exists (for local development).
+        """
+        env_path = self.root_dir / '.env'
+        
+        # Only load from .env file if it exists (local development)
+        # On Streamlit Cloud, environment variables come from Secrets
+        if env_path.exists():
+            # Read and parse .env file
+            with open(env_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip empty lines and comments
+                    if not line or line.startswith('#'):
+                        continue
                     
-                    # Remove quotes if present
-                    if value.startswith(('"', "'")) and value.endswith(('"', "'")):
-                        value = value[1:-1]
-                    
-                    # Set environment variable
-                    os.environ[key] = value
+                    # Split on first '=' only
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        
+                        # Remove quotes if present
+                        if value.startswith(('"', "'")) and value.endswith(('"', "'")):
+                            value = value[1:-1]
+                        
+                        # Only set if not already in environment (Secrets take precedence)
+                        if key not in os.environ:
+                            os.environ[key] = value
+        # If .env doesn't exist, assume we're on Streamlit Cloud or using env vars directly
+        # Environment variables from Streamlit Secrets will be used automatically
     
     def _init_config(self):
         """Initialize configuration from environment variables."""
@@ -88,7 +93,7 @@ class Config:
             missing_vars = [k for k, v in ai_service_config.items() if not v]
             raise ValueError(
                 f"Missing required AI Service environment variables: {', '.join(missing_vars)}. "
-                "Please check your .env file configuration."
+                "Please configure them in Streamlit Cloud Secrets or .env file."
             )
 
 # Create a global config instance
