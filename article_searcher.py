@@ -35,18 +35,21 @@ class ArticleSearcher:
     """
     
     def __init__(self, articles_path: Optional[str] = None, vector_db_path: Optional[str] = None, 
-                 use_azure_router: bool = True):
+                 use_azure_router: bool = True, articles_base_path: Optional[str] = None):
         """
         Initialize the AdvancedArticleSearcher.
         
         Args:
-            articles_path: Path to directory containing text articles
-            vector_db_path: Path to vector database file (JSON with embeddings)
+            articles_path: Path to directory containing text articles (deprecated, use vector_db_path)
+            vector_db_path: Path to vector database (Qdrant DB path or JSON file)
             use_azure_router: Use Azure Router for embeddings and LLM calls (always True)
+            articles_base_path: Base path to article files (for reading content)
         """
         self.articles_path = articles_path
-        self.vector_db_path = vector_db_path
+        self.vector_db_path = vector_db_path or config.vector_db_path or config.default_vector_db_path
         self.use_azure_router = use_azure_router
+        # Get articles base path from config or use default
+        self.articles_base_path = articles_base_path or config.articles_base_path
         
         # Initialize the appropriate client
         self._init_client()
@@ -70,6 +73,10 @@ class ArticleSearcher:
         
         # Local embedder (initialized lazily)
         self.local_embedder = None
+        
+        # Qdrant client (initialized lazily if vector DB is Qdrant)
+        self.qdrant_client = None
+        self.qdrant_collection = "articles"
         
         # Always use all-MiniLM-L6-v2 for consistent embeddings (384 dimensions)
         try:
@@ -95,10 +102,9 @@ class ArticleSearcher:
             return article['content']
         # Try to read from local file based on url path
         try:
-            base_path = "/Users/kirill/Documents/M/Code/AzureDevops/ArticlesInventorizer"
-            url = article.get('url') or article.get('full_content_path')
+            url = article.get('url') or article.get('full_content_path') or article.get('article_path')
             if url:
-                file_path = os.path.join(base_path, url)
+                file_path = os.path.join(self.articles_base_path, url) if not os.path.isabs(url) else url
                 if os.path.exists(file_path):
                     with open(file_path, 'r', encoding='utf-8') as f:
                         return f.read()
@@ -156,55 +162,82 @@ class ArticleSearcher:
             self.embedding_client = None
 
     def _load_articles(self):
-        """Load articles from the specified path."""
-        if not self.vector_db_path or not os.path.exists(self.vector_db_path):
+        """Load articles from the specified path (vector DB or JSON)."""
+        if not self.vector_db_path:
+            logger.warning("No vector database path specified")
+            return
+        
+        # Check if it's a Qdrant database directory
+        is_qdrant_db = os.path.isdir(self.vector_db_path) and os.path.exists(
+            os.path.join(self.vector_db_path, "config.json")
+        )
+        
+        # If it's a directory but not a Qdrant DB, or if it doesn't exist, try JSON
+        if not is_qdrant_db and not os.path.exists(self.vector_db_path):
             logger.warning(f"Vector database not found at {self.vector_db_path}")
             return
         
-        try:
-            with open(self.vector_db_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            if isinstance(data, list):
-                # Direct list of articles
-                self.articles = data
-                logger.info(f"Loaded {len(self.articles)} articles from vector database")
-            elif isinstance(data, dict) and 'articles' in data:
-                # Dictionary with articles key
-                self.articles = data['articles']
-                logger.info(f"Loaded {len(self.articles)} articles from vector database")
-            elif isinstance(data, dict) and 'embeddings' in data:
-                # Dictionary with only embeddings (no articles)
-                self.articles = []  # No articles available, only embeddings
-                logger.info("Vector database contains only embeddings, no articles available")
-            else:
-                logger.error(f"Unexpected data format in vector database: {type(data)}")
-                return
-            
-            # Load embeddings if available
-            if isinstance(data, dict) and 'embeddings' in data:
-                embeddings_data = data['embeddings']
-                self.embeddings = {}
-                self.article_paths = []
+        # If it's a Qdrant database, we'll use it directly in search
+        if is_qdrant_db:
+            logger.info(f"Detected Qdrant database at {self.vector_db_path}")
+            # Initialize Qdrant client for search (will be used in _semantic_search)
+            try:
+                from qdrant_client import QdrantClient
+                self.qdrant_client = QdrantClient(path=self.vector_db_path)
+                self.qdrant_collection = "articles"  # Default collection name
+                logger.info("Qdrant client initialized for vector search")
+            except ImportError:
+                logger.warning("qdrant-client not available, falling back to JSON")
+                is_qdrant_db = False
+            except Exception as e:
+                logger.warning(f"Failed to initialize Qdrant client: {e}, falling back to JSON")
+                is_qdrant_db = False
+        
+        # Load from JSON if not using Qdrant
+        if not is_qdrant_db:
+            try:
+                with open(self.vector_db_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
                 
-                for article_path, embedding in embeddings_data.items():
-                    if isinstance(embedding, list) and len(embedding) > 0:
-                        self.embeddings[article_path] = np.array(embedding, dtype=np.float32)
-                        self.article_paths.append(article_path)
-                        logger.debug(f"Loaded embedding for: {article_path}")
-                    else:
-                        logger.warning(f"Invalid embedding format for {article_path}: {type(embedding)}")
+                if isinstance(data, list):
+                    # Direct list of articles
+                    self.articles = data
+                    logger.info(f"Loaded {len(self.articles)} articles from vector database")
+                elif isinstance(data, dict) and 'articles' in data:
+                    # Dictionary with articles key
+                    self.articles = data['articles']
+                    logger.info(f"Loaded {len(self.articles)} articles from vector database")
+                elif isinstance(data, dict) and 'embeddings' in data:
+                    # Dictionary with only embeddings (no articles)
+                    self.articles = []  # No articles available, only embeddings
+                    logger.info("Vector database contains only embeddings, no articles available")
+                else:
+                    logger.error(f"Unexpected data format in vector database: {type(data)}")
+                    return
                 
-                logger.info(f"Loaded {len(self.embeddings)} embeddings from vector database")
-                logger.info(f"Article paths: {len(self.article_paths)}")
-                if self.article_paths:
-                    logger.info(f"First few article paths: {self.article_paths[:3]}")
-            else:
-                # Generate embeddings for articles
-                self._generate_embeddings()
-                
-        except Exception as e:
-            logger.error(f"Error loading articles from vector database: {e}")
+                # Load embeddings if available
+                if isinstance(data, dict) and 'embeddings' in data:
+                    embeddings_data = data['embeddings']
+                    self.embeddings = {}
+                    self.article_paths = []
+                    
+                    for article_path, embedding in embeddings_data.items():
+                        if isinstance(embedding, list) and len(embedding) > 0:
+                            self.embeddings[article_path] = np.array(embedding, dtype=np.float32)
+                            self.article_paths.append(article_path)
+                            logger.debug(f"Loaded embedding for: {article_path}")
+                        else:
+                            logger.warning(f"Invalid embedding format for {article_path}: {type(embedding)}")
+                    
+                    logger.info(f"Loaded {len(self.embeddings)} embeddings from vector database")
+                    logger.info(f"Article paths: {len(self.article_paths)}")
+                    if self.article_paths:
+                        logger.info(f"First few article paths: {self.article_paths[:3]}")
+                else:
+                    # Generate embeddings for articles
+                    self._generate_embeddings()
+            except Exception as e:
+                logger.error(f"Error loading articles from vector database: {e}")
 
     def _generate_embeddings(self):
         """Generate embeddings for all articles."""
@@ -296,6 +329,12 @@ class ArticleSearcher:
                 logger.warning("No candidates found in semantic search")
                 return []
             
+            # Filter by platform if incident context mentions a specific platform
+            platforms = self._extract_platforms_from_context(query + " " + incident_context)
+            if platforms:
+                logger.info(f"Filtering articles by platform: {platforms}")
+                candidates = self._filter_by_platform(candidates, platforms)
+            
             # Stage 2: LLM-based relevance scoring
             logger.info("Stage 2: Performing LLM-based relevance scoring...")
             scored_candidates = self._llm_relevance_scoring(candidates, query, incident_context)
@@ -327,6 +366,47 @@ class ArticleSearcher:
             # Using all-MiniLM-L6-v2 embeddings with 384 dimensions for consistency
             article_dimensions = len(query_embedding)  # Should be 384 for all-MiniLM-L6-v2
             logger.info(f"Using all-MiniLM-L6-v2 embeddings with {article_dimensions} dimensions for consistent semantic search")
+            
+            # Try using Qdrant if available
+            if hasattr(self, 'qdrant_client') and self.qdrant_client:
+                try:
+                    # Convert embedding to list
+                    if isinstance(query_embedding, np.ndarray):
+                        query_embedding_list = query_embedding.tolist()
+                    else:
+                        query_embedding_list = query_embedding
+                    
+                    # Search Qdrant
+                    search_results = self.qdrant_client.search(
+                        collection_name=self.qdrant_collection,
+                        query_vector=query_embedding_list,
+                        limit=top_k
+                    )
+                    
+                    # Format results
+                    candidates = []
+                    for result in search_results:
+                        payload = result.payload or {}
+                        article_path = payload.get('article_path', '')
+                        if article_path:
+                            candidate = {
+                                'article_path': article_path,
+                                'semantic_similarity': result.score,
+                                'title': self._extract_title_from_path(article_path),
+                                'content_summary': payload.get('content', '') or self._get_article_summary(article_path)
+                            }
+                            candidates.append(candidate)
+                    
+                    if candidates:
+                        logger.info(f"Qdrant search returned {len(candidates)} candidates")
+                        return candidates
+                except Exception as e:
+                    logger.warning(f"Qdrant search failed: {e}, falling back to linear search")
+            
+            # Fallback to linear search with article embeddings
+            if not self.article_paths:
+                logger.warning("No article paths available for search")
+                return []
             
             # Calculate similarities with regenerated article embeddings
             similarities = []
@@ -407,8 +487,8 @@ class ArticleSearcher:
                     ]
                 }
                 # Use Azure Router (GPT-5) parameters
-                params["max_tokens"] = 100
-                params["temperature"] = 0.1
+                params["max_completion_tokens"] = 200  # GPT-5 uses max_completion_tokens, increased to avoid truncation
+                # Note: GPT-5 doesn't support temperature parameter
                 
                 logger.debug(f"Calling LLM for scoring article: {candidate.get('title', 'Unknown')}")
                 response = self.client.chat.completions.create(**params)
@@ -470,8 +550,8 @@ class ArticleSearcher:
                         ]
                     }
                     # Use Azure Router (GPT-5) parameters
-                    params["max_tokens"] = 50
-                    params["temperature"] = 0.1
+                    params["max_completion_tokens"] = 100  # GPT-5 uses max_completion_tokens
+                    # Note: GPT-5 doesn't support temperature parameter
                     
                     response = self.client.chat.completions.create(**params)
                     result = self._extract_comparison_result(response.choices[0].message.content)
@@ -512,8 +592,8 @@ class ArticleSearcher:
                     ]
                 }
                 # Use Azure Router (GPT-5) parameters
-                params["max_tokens"] = 200
-                params["temperature"] = 0.3
+                params["max_completion_tokens"] = 300  # GPT-5 uses max_completion_tokens, increased for explanations
+                # Note: GPT-5 doesn't support temperature parameter
                 
                 logger.debug(f"Calling LLM for explanation: {candidate.get('title', 'Unknown')}")
                 response = self.client.chat.completions.create(**params)
@@ -651,8 +731,7 @@ class ArticleSearcher:
     def _get_article_summary(self, article_path: str, max_chars: int = 600) -> str:
         """Read a brief summary from the beginning of the article file if available."""
         try:
-            base_path = "/Users/kirill/Documents/M/Code/AzureDevops/ArticlesInventorizer"
-            file_path = os.path.join(base_path, article_path)
+            file_path = os.path.join(self.articles_base_path, article_path) if not os.path.isabs(article_path) else article_path
             if os.path.exists(file_path) and os.path.isfile(file_path):
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     text = f.read(max_chars * 3)  # read a chunk, then trim
@@ -671,11 +750,10 @@ class ArticleSearcher:
                 logger.warning("TF-IDF fallback: no article paths available")
                 return []
 
-            base_path = "/Users/kirill/Documents/M/Code/AzureDevops/ArticlesInventorizer"
             documents: List[str] = []
             valid_paths: List[str] = []
             for p in self.article_paths:
-                file_path = os.path.join(base_path, p)
+                file_path = os.path.join(self.articles_base_path, p) if not os.path.isabs(p) else p
                 try:
                     if os.path.exists(file_path) and os.path.isfile(file_path):
                         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -717,6 +795,14 @@ class ArticleSearcher:
 
     def _create_relevance_scoring_prompt(self, candidate: Dict[str, Any], query: str, incident_context: str) -> str:
         """Create prompt for LLM relevance scoring."""
+        # Truncate long content to avoid max_tokens issues
+        content_summary = candidate.get('content_summary', 'No summary available')
+        if len(content_summary) > 500:
+            content_summary = content_summary[:500] + "..."
+        
+        # Truncate incident context if too long
+        incident_context_truncated = incident_context[:1000] if len(incident_context) > 1000 else incident_context
+        
         return f"""
 # Technical Support Article Relevance Assessment
 
@@ -724,12 +810,11 @@ class ArticleSearcher:
 {query}
 
 ## Incident Context
-{incident_context}
+{incident_context_truncated}
 
 ## Article to Evaluate
 **Title:** {candidate.get('title', 'Unknown')}
-**URL:** {candidate.get('url', 'Unknown')}
-**Content Summary:** {candidate.get('content_summary', 'No summary available')}
+**Content Summary:** {content_summary}
 
 ## Scoring Criteria
 Rate the relevance of this article to the incident on a scale of 0-10:
@@ -795,6 +880,14 @@ Response: [1, -1, or 0]
     
     def _create_explanation_prompt(self, candidate: Dict[str, Any], query: str, incident_context: str) -> str:
         """Create prompt for generating intelligent explanations."""
+        # Truncate long content to avoid max_tokens issues
+        content_summary = candidate.get('content_summary', 'No summary available')
+        if len(content_summary) > 500:
+            content_summary = content_summary[:500] + "..."
+        
+        # Truncate incident context if too long
+        incident_context_truncated = incident_context[:1000] if len(incident_context) > 1000 else incident_context
+        
         return f"""
 # Technical Support Article Relevance Explanation
 
@@ -802,12 +895,11 @@ Response: [1, -1, or 0]
 {query}
 
 ## Incident Context
-{incident_context}
+{incident_context_truncated}
 
 ## Article
 **Title:** {candidate.get('title', 'Unknown')}
-**URL:** {candidate.get('url', 'Unknown')}
-**Content Summary:** {candidate.get('content_summary', 'No summary available')}
+**Content Summary:** {content_summary}
 **Relevance Score:** {candidate.get('llm_relevance_score', 0)}/10
 
 ## Task
@@ -905,17 +997,22 @@ Provide a clear, concise explanation of the relevance:
         if not results:
             return "No relevant articles found."
         
+        # Sort results by relevance score (descending - highest first)
+        sorted_results = sorted(
+            results, 
+            key=lambda x: x.get('relevance_score', x.get('llm_relevance_score', 0)), 
+            reverse=True
+        )
+        
         formatted_results = []
         
-        for i, result in enumerate(results, 1):
+        for i, result in enumerate(sorted_results, 1):
             title = result.get('title', 'Unknown Title')
-            url = result.get('url', 'No URL available')
             score = result.get('relevance_score', result.get('llm_relevance_score', 0))
             explanation = result.get('intelligent_explanation', 'No explanation available')
             
-            # Format the result
+            # Format the result with relevance score on a new line
             result_text = f"{i}. {title}\n"
-            result_text += f"   URL: {url}\n"
             result_text += f"   Relevance Score: {score:.1f}/10\n"
             
             if include_explanations and explanation:
@@ -965,13 +1062,12 @@ Provide a clear, concise explanation of the relevance:
             return []
         
         try:
-            base_path = "/Users/kirill/Documents/M/Code/AzureDevops/ArticlesInventorizer"
             documents: List[str] = []
             valid_paths: List[str] = []
             
             # Load article content
             for p in self.article_paths:
-                file_path = os.path.join(base_path, p)
+                file_path = os.path.join(self.articles_base_path, p) if not os.path.isabs(p) else p
                 try:
                     if os.path.exists(file_path) and os.path.isfile(file_path):
                         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -1034,8 +1130,7 @@ Provide a clear, concise explanation of the relevance:
             Full article content as string
         """
         try:
-            base_path = "/Users/kirill/Documents/M/Code/AzureDevops/ArticlesInventorizer"
-            file_path = os.path.join(base_path, url)
+            file_path = os.path.join(self.articles_base_path, url) if not os.path.isabs(url) else url
             
             if os.path.exists(file_path):
                 with open(file_path, 'r', encoding='utf-8') as f:
@@ -1046,6 +1141,71 @@ Provide a clear, concise explanation of the relevance:
         except Exception as e:
             logger.error(f"Error reading full article content for {url}: {e}")
             return f"Error reading article: {e}"
+    
+    def _extract_platforms_from_context(self, context: str) -> List[str]:
+        """Extract platform information from incident context."""
+        context_lower = context.lower()
+        platforms = []
+        
+        # macOS detection
+        if 'macos' in context_lower or 'mac os' in context_lower or 'macintosh' in context_lower:
+            platforms.append('macos')
+        # Windows detection
+        if 'windows' in context_lower:
+            platforms.append('windows')
+        # Linux detection
+        if 'linux' in context_lower:
+            platforms.append('linux')
+        if 'rhel' in context_lower or 'red hat' in context_lower:
+            platforms.append('linux')
+        if 'ubuntu' in context_lower:
+            platforms.append('linux')
+        if 'centos' in context_lower:
+            platforms.append('linux')
+        if 'debian' in context_lower:
+            platforms.append('linux')
+        
+        return list(set(platforms))
+    
+    def _filter_by_platform(self, candidates: List[Dict[str, Any]], platforms: List[str]) -> List[Dict[str, Any]]:
+        """Filter candidates by platform, prioritizing matching platforms."""
+        if not platforms:
+            return candidates
+        
+        platform_lower = [p.lower() for p in platforms]
+        matching = []
+        non_matching = []
+        
+        for candidate in candidates:
+            title = candidate.get('title', '').lower()
+            summary = candidate.get('content_summary', '').lower()
+            path = candidate.get('article_path', '').lower()
+            
+            content = f"{title} {summary} {path}"
+            
+            # Check if article matches any of the platforms
+            matches = False
+            for platform in platform_lower:
+                if platform in content:
+                    matches = True
+                    break
+            
+            if matches:
+                matching.append(candidate)
+            else:
+                # Check if article explicitly mentions other platforms (exclude those)
+                other_platforms = ['windows', 'linux', 'macos', 'mac os']
+                mentions_other = any(p in content and p not in platform_lower for p in other_platforms)
+                if not mentions_other:
+                    non_matching.append(candidate)
+        
+        # Prioritize matching articles, but include some non-matching if we don't have enough
+        if len(matching) >= 5:
+            logger.info(f"Found {len(matching)} platform-matching articles, using only those")
+            return matching
+        else:
+            logger.info(f"Found {len(matching)} platform-matching articles, adding {len(non_matching)} non-platform-specific articles")
+            return matching + non_matching
 
 
 # Backward compatibility alias

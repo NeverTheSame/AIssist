@@ -3,11 +3,13 @@ import csv
 import subprocess
 import os
 import json
+import uuid
 from azure.kusto.data.exceptions import KustoNetworkError
 from datetime import datetime
 import traceback
 import argparse
 import logging
+from typing import List, Dict, Tuple
 from timing_utils import start_timing, end_timing, time_operation, time_context, print_timing_summary, save_timing_report, reset_timing_data
 
 # Configure centralized logging
@@ -79,38 +81,33 @@ def show_prompt_menu():
         with open("prompts.json", "r", encoding="utf-8") as f:
             prompts = json.load(f)
         
-        # Filter to show molecular prompt types and specific analysis prompts
-        prompt_types = [pt for pt in prompts.keys() if pt.endswith('_molecular') or pt in ['create_prompt_for_logs_analyze', 'stage_duration_analysis', 'resolution_delay_analysis']]
-        
+        # Show all available prompt types
+        prompt_types = list(prompts.keys())
+
         if not prompt_types:
             print("No prompt types found in prompts.json")
             sys.exit(1)
+
+        # Load curated list of interactive menu prompts with emojis
+        try:
+            with open("interactive_menu_prompts.json", "r", encoding="utf-8") as f:
+                prompt_emojis = json.load(f)
+        except FileNotFoundError:
+            prompt_emojis = {}
+        except json.JSONDecodeError:
+            prompt_emojis = {}
+
+        # Filter to only show prompts that have emojis
+        prompt_types_with_emojis = [pt for pt in prompt_types if pt in prompt_emojis]
         
-        # Emoji mapping for each prompt type
-        prompt_emojis = {
-            'customer_pending_facilitation_molecular': '👤',
-            'dev_pending_facilitation_molecular': '👨‍💻',
-            'escalation_molecular': '📈',
-            'mitigation_molecular': '🛡️',
-            'troubleshooting_molecular': '🔧',
-            'wait_time_molecular': '⏱️',
-            'stage_duration_analysis': '📊',
-            'prev_act_molecular': '🔒',
-            'weekly_insights_molecular': '📅',
-            'article_search_molecular': '🔍',
-            'troubleshooting_plan_molecular': '📋',
-            'create_prompt_for_logs_analyze': '📝',
-            'improvement_analysis_molecular': '💡',
-            'kb_article_molecular': '📚',
-            'product_improvement_email_molecular': '✉️',
-            'runbook_creation_request_molecular': '📖',
-            'resolution_delay_analysis': '⏳'
-        }
+        if not prompt_types_with_emojis:
+            print("No prompt types with emojis found in prompts.json")
+            sys.exit(1)
         
         print("\nAvailable prompt types:")
         print("=" * 40)
-        for i, prompt_type in enumerate(prompt_types, 1):
-            emoji = prompt_emojis.get(prompt_type, '•')
+        for i, prompt_type in enumerate(prompt_types_with_emojis, 1):
+            emoji = prompt_emojis[prompt_type]
             print(f"{i:2d}. {emoji} {prompt_type}")
         print("=" * 40)
         
@@ -119,12 +116,12 @@ def show_prompt_menu():
                 choice = input("Select a prompt type (enter number): ").strip()
                 choice_num = int(choice)
                 
-                if 1 <= choice_num <= len(prompt_types):
-                    selected_prompt = prompt_types[choice_num - 1]
+                if 1 <= choice_num <= len(prompt_types_with_emojis):
+                    selected_prompt = prompt_types_with_emojis[choice_num - 1]
                     print(f"Selected: {selected_prompt}")
                     
                     # Automatically set vector database path for article search mode
-                    if selected_prompt == 'article_search_molecular':
+                    if selected_prompt == 'article_search':
                         from config import config
                         default_vector_db_path = config.default_vector_db_path
                         if default_vector_db_path:
@@ -136,7 +133,7 @@ def show_prompt_menu():
                     
                     return selected_prompt, None
                 else:
-                    print(f"Invalid choice. Please enter a number between 1 and {len(prompt_types)}")
+                    print(f"Invalid choice. Please enter a number between 1 and {len(prompt_types_with_emojis)}")
             except ValueError:
                 print("Invalid input. Please enter a number.")
             except KeyboardInterrupt:
@@ -234,13 +231,30 @@ def fetch_incident_data(incident_number):
     
     logger.info(f"Successfully fetched data for incident {incident_number}. CSV file created at {csv_path}")
     print(f"✅ Created: {csv_path}")
-    # Immediately detect redacted authored summary for user awareness
+    # Immediately detect redacted authored summary and stop processing if manual.docx is not available
     try:
         if _detect_redacted_in_csv(csv_path):
-            print(f"⚠️  Authored summary appears REDACTED for incident {incident_number}. Using manual.docx if available.")
-    except Exception:
-        # Non-blocking: continue even if detection fails
-        pass
+            print(f"⚠️  Authored summary appears REDACTED for incident {incident_number}.")
+            # Check if manual.docx exists to handle redacted content
+            try:
+                from config import config
+                manual_docx_path = os.path.join(str(config.root_dir), "manual.docx")
+                if os.path.exists(manual_docx_path):
+                    print(f"✅ Found manual.docx at {manual_docx_path}. Continuing with processing.")
+                    print(f"   Transformer will use manual.docx to replace redacted summary.")
+                else:
+                    print(f"❌ REDACTED summary detected but manual.docx not found at {manual_docx_path}.")
+                    print(f"   Stopping processing. Please provide manual.docx and retry.")
+                    logger.warning(f"Stopping processing for incident {incident_number} due to redacted summary without manual.docx")
+                    return False
+            except Exception as config_error:
+                logger.error(f"Failed to check for manual.docx: {config_error}")
+                print(f"❌ Failed to check for manual.docx. Stopping processing to avoid using redacted content.")
+                return False
+    except Exception as e:
+        logger.warning(f"Failed CSV redaction scan: {e}")
+        # If detection fails, continue but log the issue
+        print(f"⚠️  Warning: Could not scan for redacted content. Continuing with caution.")
     return True
 
 @time_operation("process_incident_to_json", "process")
@@ -290,6 +304,65 @@ def process_incident_to_json(incident_number):
         logger.error(f"STDOUT: {e.stdout}")
         logger.error(f"STDERR: {e.stderr}")
         raise
+
+def process_manual_docx_only(incident_number):
+    """Create a processed incident JSON using manual.docx content only."""
+    logger.info(f"Starting manual.docx processing for incident {incident_number}")
+    print(f"Processing manual.docx for incident {incident_number}...")
+
+    try:
+        from transformer import (
+            prompt_user_for_docx,
+            extract_images_from_docx,
+            extract_summary_from_docx_text,
+            dump_discussion_items_to_json,
+        )
+    except Exception as import_error:
+        logger.error(f"Failed to import manual.docx helpers: {import_error}")
+        raise
+
+    docx_path = prompt_user_for_docx(incident_number)
+    if not docx_path:
+        error_msg = "manual.docx not found at project root. Provide the document and retry."
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    try:
+        # Use new extraction function that returns both text and images
+        docx_text, docx_images = extract_images_from_docx(docx_path)
+        print(f"📸 Extracted {len(docx_images)} screenshot(s) from manual.docx")
+    except Exception as extract_error:
+        logger.error(f"Failed to read manual.docx: {extract_error}")
+        raise
+
+    if not docx_text or not docx_text.strip():
+        error_msg = "manual.docx appears empty. Populate it with incident details and retry."
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    extracted_summary = None
+    try:
+        extracted_summary = extract_summary_from_docx_text(docx_text)
+    except Exception as summary_error:
+        logger.warning(f"LLM extraction failed; using raw manual.docx content. Error: {summary_error}")
+        extracted_summary = None
+
+    final_summary = extracted_summary.strip() if extracted_summary and extracted_summary.strip() else docx_text.strip()
+
+    try:
+        output_file, _ = dump_discussion_items_to_json(
+            [],
+            str(incident_number),
+            summary_content=final_summary,
+            summary_images=docx_images if docx_images else None,
+        )
+    except Exception as dump_error:
+        logger.error(f"Failed to write processed incident JSON: {dump_error}")
+        raise
+
+    logger.info(f"Manual processing completed. Output: {output_file}")
+    print(f"✅ Created: {output_file}")
+    return output_file
 
 @time_operation("combine_incident_data", "process")
 def combine_incident_data(incident_numbers):
@@ -442,9 +515,6 @@ def _process_combined_incidents(processor, combined_data, prompts, prompt_type, 
             print(summary_result['summary'])
             print("="*80)
             
-            # Print molecular context info if available
-            if 'molecular_context' in summary_result:
-                print(f"Molecular Context: {summary_result['molecular_context']}")
         
         # Save the results
         output_file = f"combined_{'_'.join(incident_numbers)}"
@@ -459,14 +529,19 @@ def _process_single_incident(processor, incident_data, prompts, prompt_type, deb
     """Helper function to process a single incident."""
     # Extract conversation data (needed for all modes)
     conversation = incident_data.get('conversation', [])
-    
+
     # Defensive check to ensure conversation is always a list
     if not isinstance(conversation, list):
         logger.warning(f"Conversation data is not a list, got {type(conversation)}. Converting to empty list.")
         conversation = []
-    
+
+    # Extract summary images if available (multimodal data)
+    summary_images = incident_data.get('summary_images', None)
+    if summary_images:
+        logger.info(f"Incident has {len(summary_images)} screenshot(s) from manual.docx")
+
     # Check if this is article search mode
-    if prompt_type == 'article_search_molecular':
+    if prompt_type == 'article_search':
         # Use article search processing
         summary_result = processor.process_article_search(
             incident_data=incident_data,
@@ -495,13 +570,21 @@ def _process_single_incident(processor, incident_data, prompts, prompt_type, deb
             print("="*80)
             print(summary_result['analysis'])
             print("="*80)
-    elif prompt_type == 'prev_act_molecular':
+    elif prompt_type == 'prev_act':
         # Use preventative action processing
         summary = incident_data.get('summary', None)
-        formatted_content = processor.format_conversation_with_ai_summary(conversation, summary=summary)
-        
+        formatted_content = processor.format_conversation_with_ai_summary(conversation, summary=summary, summary_images=summary_images)
+
+        # Check if formatted_content is multimodal (list) or text-only (string)
+        if isinstance(formatted_content, list):
+            # Multimodal content - pass directly
+            content_for_llm = formatted_content
+        else:
+            # Text-only content - wrap in list
+            content_for_llm = [{'type': 'text', 'content': formatted_content}]
+
         summary_result = processor.generate_summary(
-            [{'type': 'text', 'content': formatted_content}],
+            content_for_llm,
             prompts['system_prompt'],
             prompts['user_prompt'],
             prompt_type=prompt_type,
@@ -517,19 +600,20 @@ def _process_single_incident(processor, incident_data, prompts, prompt_type, deb
             print(summary_result['summary'])
             print("="*80)
         
-        # Launch preventative action manager
+        # Preventative action database management
         print("\n" + "="*80)
         print("PREVENTATIVE ACTION MANAGEMENT")
         print("="*80)
         
-        # Import and run PA manager
         try:
-            from preventative_actions.pa_manager import PreventativeActionManager
-            pa_manager = PreventativeActionManager()
-            pa_manager.interactive_create(incident_id, processor, existing_analysis=summary_result)
+            analysis_text = summary_result.get('summary', '') if summary_result else ''
+            
+            # Interactive dialog to manage preventative actions database
+            _interactive_preventative_action_dialog(incident_id, analysis_text, processor)
+        
         except Exception as e:
-            logger.error(f"Error launching PA manager: {e}")
-            print(f"Error launching PA manager: {e}")
+            logger.error(f"Error in preventative action management: {e}")
+            print(f"⚠️  Error in preventative action management: {e}")
             import traceback
             traceback.print_exc()
     elif prompt_type == 'logs_analyzer':
@@ -580,10 +664,20 @@ def _process_single_incident(processor, incident_data, prompts, prompt_type, deb
     else:
         # Generate summary for other modes
         summary = incident_data.get('summary', None)
-        formatted_content = processor.format_conversation_with_ai_summary(conversation, summary=summary)
-        
+
+        # Check if this is team engagement mode - need to load Teams discussion CSV
+        formatted_content = processor.format_conversation_with_ai_summary(conversation, summary=summary, summary_images=summary_images)
+
+        # Check if formatted_content is multimodal (list) or text-only (string)
+        if isinstance(formatted_content, list):
+            # Multimodal content - pass directly
+            content_for_llm = formatted_content
+        else:
+            # Text-only content - wrap in list
+            content_for_llm = [{'type': 'text', 'content': formatted_content}]
+
         summary_result = processor.generate_summary(
-            [{'type': 'text', 'content': formatted_content}],
+            content_for_llm,
             prompts['system_prompt'],
             prompts['user_prompt'],
             prompt_type=prompt_type,
@@ -614,6 +708,150 @@ def _process_single_incident(processor, incident_data, prompts, prompt_type, deb
             processor.store_incident_memory(incident_id, incident_data, summary_result)
         except Exception as e:
             logger.error(f"Failed to store memory for incident {incident_id}: {e}")
+    
+    # Display team recommendations and pending updates (skip for prev_act)
+    # Also skip for workflows that auto-save (1-4 and 12)
+    auto_save_workflows = [
+        'customer_pending_facilitation',
+        'dev_pending_facilitation',
+        'escalation',
+        'mitigation',
+        'create_prompt_for_logs_analyze'
+    ]
+
+    if processor.team_knowledge_manager:
+        try:
+            # Display team recommendations if available in summary result
+            if summary_result and 'team_recommendations' in summary_result:
+                recommendations = summary_result['team_recommendations']
+                if recommendations:
+                    print("\n" + "=" * 80)
+                    print("👥 TEAM RECOMMENDATIONS")
+                    print("=" * 80)
+                    for i, rec in enumerate(recommendations, 1):
+                        print(f"{i}. {rec.get('team_name', 'Unknown')} (confidence: {rec.get('confidence', 0):.2f})")
+                        evidence = rec.get('evidence', [])
+                        if evidence:
+                            print(f"   Evidence: {'; '.join(evidence[:2])}")
+                    print("=" * 80)
+            
+            # Display transfer reasons if available
+            if summary_result and 'transfer_reasons' in summary_result:
+                transfer_reasons = summary_result['transfer_reasons']
+                if transfer_reasons:
+                    print("\n" + "=" * 80)
+                    print("🔄 TRANSFER REASONS EXTRACTED")
+                    print("=" * 80)
+                    for reason in transfer_reasons[:3]:  # Show top 3
+                        team_name = reason.get('team_name', 'Unknown')
+                        reason_text = reason.get('transfer_reason', '')
+                        evidence = reason.get('evidence', [])
+                        print(f"Team: {team_name}")
+                        print(f"Reason: {reason_text}")
+                        if evidence:
+                            print(f"Evidence: {evidence[0][:150]}...")
+                        print("-" * 80)
+                    print("=" * 80)
+        except Exception as e:
+            logger.warning(f"Failed to display team recommendations: {e}")
+
+def _interactive_preventative_action_dialog(incident_id: str, analysis_text: str, processor):
+    """Interactive dialog to manage preventative actions in Azure DevOps."""
+    # Query Azure DevOps for active preventative actions
+    print(f"\n🔍 Querying Azure DevOps for active preventative actions...")
+    active_work_items = []
+    ado_client = None
+    try:
+        from azure_devops_client import AzureDevOpsClient
+        from config import config
+        
+        if config.azure_devops_pat:
+            ado_client = AzureDevOpsClient(
+                org=config.azure_devops_org,
+                project=config.azure_devops_project,
+                pat=config.azure_devops_pat
+            )
+            # Query for work items assigned to Kirill Kuklin where Custom field 1 = "KK"
+            active_work_items = ado_client.get_active_preventative_actions(assigned_to="Kirill Kuklin", custom_field_value="KK", max_results=50)
+        else:
+            print("⚠️  Azure DevOps PAT not configured, skipping Azure DevOps query")
+            return
+    except Exception as e:
+        logger.warning(f"Error querying Azure DevOps: {e}")
+        print(f"⚠️  Could not query Azure DevOps: {e}")
+        return
+    
+    if not ado_client:
+        print("❌ Azure DevOps client not available")
+        return
+    
+    # Display Azure DevOps work items
+    if active_work_items:
+        print(f"\n📋 Found {len(active_work_items)} active preventative action(s) in Azure DevOps:")
+        for i, work_item in enumerate(active_work_items, 1):
+            print(f"\n{i}. Work Item {work_item.get('id', 'unknown')}")
+            print(f"   Title: {work_item.get('title', 'No title')}")
+            print(f"   State: {work_item.get('state', 'Unknown')}")
+            # Display custom fields
+            icm_count = work_item.get('icm_incident_count')
+            if icm_count is not None:
+                print(f"   IcM Incident Count: {icm_count}")
+            icm_ids = work_item.get('icm_incident_ids')
+            if icm_ids:
+                print(f"   IcM Incident IDs: {icm_ids}")
+            icm_type = work_item.get('icm_repair_item_type')
+            if icm_type:
+                print(f"   IcM Repair Item Type: {icm_type}")
+    
+    if active_work_items:
+        total_count = len(active_work_items)
+        response = input(f"\nDoes this incident match any of the above? Enter number (1-{total_count}) or 'n' for new: ").strip().lower()
+        
+        if response.isdigit():
+            idx = int(response) - 1
+            if 0 <= idx < len(active_work_items):
+                selected_work_item = active_work_items[idx]
+                work_item_id = selected_work_item.get('id')
+                print(f"\n✅ Selected Azure DevOps Work Item: #{work_item_id} - {selected_work_item.get('title')}")
+                
+                # Update the work item with the new incident ID
+                if ado_client.update_work_item_with_incident(work_item_id, incident_id):
+                    print(f"✅ Updated work item #{work_item_id} with incident {incident_id}")
+                else:
+                    print(f"❌ Failed to update work item #{work_item_id}")
+                return
+    
+    # Create new work item
+    print(f"\n📝 Creating new preventative action work item...")
+    
+    # Ask for title
+    title_input = input("Enter title: ").strip()
+    if not title_input:
+        print("❌ Title is required")
+        return
+    
+    # Ask for IcM Repair Item Type
+    print("\nCommon IcM Repair Item Types: Product Improvement, Process Enablement, TSG, Public Documentation, Technical Enablement, Diagnostic Tools, SHS Alchemy")
+    icm_type_input = input("Enter IcM Repair Item Type: ").strip()
+    if not icm_type_input:
+        print("❌ IcM Repair Item Type is required")
+        return
+    
+    # Create the work item
+    work_item_id = ado_client.create_preventative_action_work_item(
+        title=title_input,
+        icm_repair_item_type=icm_type_input,
+        incident_id=incident_id,
+        description=analysis_text
+    )
+    
+    if work_item_id:
+        print(f"✅ Created new preventative action work item: #{work_item_id}")
+        from config import config
+        work_item_url = f"https://dev.azure.com/{config.azure_devops_org}/{config.azure_devops_project.replace(' ', '%20')}/_workitems/edit/{work_item_id}"
+        print(f"   URL: {work_item_url}")
+    else:
+        print(f"❌ Failed to create work item")
 
 def main():
     # Parse arguments first to check if timing is enabled
@@ -628,47 +866,54 @@ def main():
     
     parser = argparse.ArgumentParser(description="Process multiple support incidents and provide unified summarization")
     parser.add_argument("incident_numbers", nargs="*", help="One or more incident numbers to process")
-    parser.add_argument("--prompt-type", help="Type of prompt to use for summarization")
+    parser.add_argument("--prompt", "-p", help="Type of prompt to use for summarization")
     # Always use AI Service (GPT-5) - no model selection needed
     parser.add_argument("--debug", "-d", action="store_true", help="Enable API debugging")
     parser.add_argument("--troubleshooting-plan", action="store_true", help="Generate troubleshooting plan mode - first incident is primary, others are historical references")
     parser.add_argument("--articles-embeddings", help="Path to article embeddings file (for article search mode)")
     parser.add_argument("--vector-db-path", help="Path to vector database file (for memory management)")
+    parser.add_argument("--manual-docx", action="store_true", help="Use manual.docx content instead of fetching incident data from Kusto")
     parser.add_argument("--timing", action="store_true", help="Enable detailed timing analysis and reporting")
-    parser.add_argument("--enable-team-analysis", action="store_true", help="Enable team analysis and team matching features")
+    parser.add_argument("--teams", "-t", action="store_true", help="Enable team knowledge and team matching (disabled by default)")
     parser.add_argument("--multi-incident", action="store_true", help="Process multiple incidents directly (for debugging or specific use cases)")
     parser.add_argument("--input-file", help="Path to a JSON file containing incident data (for single or multi-incident mode)")
     
     args = parser.parse_args(processed_args)
     enable_timing = args.timing
+    manual_docx_mode = args.manual_docx
+
+    if manual_docx_mode and args.input_file:
+        logger.error("--manual-docx cannot be combined with --input-file")
+        print("Error: --manual-docx cannot be combined with --input-file")
+        sys.exit(1)
     
     # Handle --input-file mode early (works for both single and multi-incident)
     if args.input_file:
         # Handle --multi-incident mode with input file
         if args.multi_incident:
-            if not args.prompt_type:
-                logger.error("--prompt-type is required when using --multi-incident mode")
-                print("Error: --prompt-type is required when using --multi-incident mode")
+            if not args.prompt:
+                logger.error("--prompt is required when using --multi-incident mode")
+                print("Error: --prompt is required when using --multi-incident mode")
                 sys.exit(1)
-            
+
             # Process directly using processor.py
             try:
                 from processor import IncidentProcessor, load_prompts
-                
+
                 # Load prompts
-                prompts = load_prompts(args.prompt_type)
+                prompts = load_prompts(args.prompt)
                 
                 # Initialize processor
                 processor = IncidentProcessor(
                     enable_memory=True,
-                    enable_team_analysis=args.enable_team_analysis,
+                    enable_team_analysis=args.teams,
                     articles_path=args.articles_embeddings,
                     vector_db_path=args.vector_db_path,
                     enable_timing=enable_timing
                 )
                 
                 # Process multiple incidents
-                processor.process_multiple_incidents(args.input_file, prompts, args.prompt_type, args.debug)
+                processor.process_multiple_incidents(args.input_file, prompts, args.prompt, args.debug)
                 return
             except Exception as e:
                 logger.error(f"Error processing multiple incidents: {e}")
@@ -709,16 +954,16 @@ def main():
                 
                 # Extract incident number
                 incident_number = data.get('incident_number') or data.get('incident_id') or os.path.basename(args.input_file).replace('.json', '').replace('incident_', '')
-                
+
                 # Select prompt type if not provided
-                if not args.prompt_type:
+                if not args.prompt:
                     logger.info("No prompt type specified, showing interactive menu")
                     prompt_type, auto_vector_db_path = show_prompt_menu()
                     if auto_vector_db_path and not args.vector_db_path:
                         args.vector_db_path = auto_vector_db_path
                         logger.info(f"Auto-detected vector database path: {auto_vector_db_path}")
                 else:
-                    prompt_type = args.prompt_type
+                    prompt_type = args.prompt
                 
                 # Validate prompt type
                 try:
@@ -736,7 +981,7 @@ def main():
                     sys.exit(1)
                 
                 # Set default vector database path if needed
-                if prompt_type == 'article_search_molecular' and not args.vector_db_path:
+                if prompt_type == 'article_search' and not args.vector_db_path:
                     from config import config
                     default_vector_db_path = config.default_vector_db_path
                     if default_vector_db_path:
@@ -751,7 +996,7 @@ def main():
                 # Initialize processor
                 processor = IncidentProcessor(
                     enable_memory=True,
-                    enable_team_analysis=args.enable_team_analysis,
+                    enable_team_analysis=args.teams,
                     articles_path=args.articles_embeddings,
                     vector_db_path=args.vector_db_path,
                     enable_timing=enable_timing
@@ -813,14 +1058,26 @@ def main():
     
     # Extract arguments
     incident_numbers = args.incident_numbers
-    prompt_type = args.prompt_type
+    prompt_type = args.prompt
     # Always use AI Service (GPT-5)
     use_ai_service_default = True
     debug_api = args.debug
     troubleshooting_plan_mode = args.troubleshooting_plan
     articles_embeddings = args.articles_embeddings
     vector_db_path = args.vector_db_path
-    enable_team_analysis = args.enable_team_analysis
+    # Team analysis is disabled by default, can be enabled with --teams/-t
+    enable_team_analysis = args.teams
+    multi_incident_mode = args.multi_incident
+
+    if manual_docx_mode and troubleshooting_plan_mode:
+        logger.error("--manual-docx cannot be combined with --troubleshooting-plan")
+        print("Error: --manual-docx cannot be combined with --troubleshooting-plan")
+        sys.exit(1)
+
+    if manual_docx_mode and multi_incident_mode:
+        logger.error("--manual-docx cannot be combined with --multi-incident")
+        print("Error: --manual-docx cannot be combined with --multi-incident")
+        sys.exit(1)
     
     # Set default values from config if not provided
     if not articles_embeddings:
@@ -839,32 +1096,14 @@ def main():
 
     print(f"Processing {len(incident_numbers)} incident(s): {', '.join(incident_numbers)}")
 
-    # Handle troubleshooting plan mode
+    # Handle troubleshooting plan mode (disabled - prompt not in kept list)
     if troubleshooting_plan_mode:
-        logger.info("Troubleshooting plan mode detected")
-        
-        if len(incident_numbers) < 2:
-            error_msg = "Troubleshooting plan mode requires at least 2 incidents (1 primary + 1 historical reference)"
-            logger.error(error_msg)
-            print(f"Error: {error_msg}")
-            sys.exit(1)
-        
-        primary_incident = incident_numbers[0]
-        historical_incidents = incident_numbers[1:]
-        
-        logger.info(f"Troubleshooting plan configuration:")
-        logger.info(f"  Primary incident: {primary_incident}")
-        logger.info(f"  Historical reference incidents: {historical_incidents}")
-        
-        print(f"Troubleshooting plan mode:")
-        print(f"  Primary incident: {primary_incident}")
-        print(f"  Historical reference incidents: {', '.join(historical_incidents)}")
-        
-        # Set the prompt type for troubleshooting plan
-        prompt_type = "troubleshooting_plan_molecular"
-        logger.info(f"Using prompt type: {prompt_type}")
-        print(f"Using prompt type: {prompt_type}")
-    else:
+        error_msg = "Troubleshooting plan mode is no longer supported (troubleshooting_plan_molecular prompt was removed)"
+        logger.error(error_msg)
+        print(f"Error: {error_msg}")
+        sys.exit(1)
+
+    if prompt_type is None:
         # If no prompt type specified, show interactive menu
         if prompt_type is None:
             logger.info("No prompt type specified, showing interactive menu")
@@ -894,7 +1133,7 @@ def main():
         sys.exit(1)
 
     # Auto-detect vector database path for article search mode
-    if prompt_type == 'article_search_molecular' and not vector_db_path:
+    if prompt_type == 'article_search' and not vector_db_path:
         from config import config
         default_vector_db_path = config.default_vector_db_path
         if default_vector_db_path:
@@ -905,44 +1144,62 @@ def main():
             logger.warning("⚠️ Article search mode detected but DEFAULT_VECTOR_DB_PATH not set in .env file")
             print("⚠️ Article search mode detected but DEFAULT_VECTOR_DB_PATH not set in .env file")
 
-    # Step 1: Fetch data for all incidents from database
-    logger.info("=" * 50)
-    logger.info("STEP 1: Fetching data from database")
-    logger.info("=" * 50)
-    
     successful_incidents = []
-    for incident_number in incident_numbers:
-        if fetch_incident_data(incident_number):
-            successful_incidents.append(incident_number)
-        else:
-            logger.warning(f"Skipping incident {incident_number} due to fetch failure")
-            print(f"Skipping incident {incident_number} due to fetch failure")
-    
-    if not successful_incidents:
-        logger.error("No incidents were successfully fetched. Exiting.")
-        print("No incidents were successfully fetched. Exiting.")
-        sys.exit(1)
-    
-    logger.info(f"Successfully fetched data for {len(successful_incidents)} incident(s): {successful_incidents}")
-    print(f"Successfully fetched data for {len(successful_incidents)} incident(s): {', '.join(successful_incidents)}")
 
-    # Step 2: Process CSV to JSON for all successful incidents
-    logger.info("=" * 50)
-    logger.info("STEP 2: Converting CSV to JSON")
-    logger.info("=" * 50)
-    
-    for incident_number in successful_incidents:
+    if manual_docx_mode:
+        logger.info("Manual docx mode enabled; skipping database fetch and CSV processing")
+        if len(incident_numbers) != 1:
+            error_msg = "--manual-docx requires exactly one incident number"
+            logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            sys.exit(1)
+
+        incident_number = incident_numbers[0]
         try:
-            process_incident_to_json(incident_number)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Error processing incident {incident_number} to JSON: {e}")
-            print(f"Error processing incident {incident_number} to JSON: {e}")
-            successful_incidents.remove(incident_number)
+            process_manual_docx_only(incident_number)
+            successful_incidents.append(incident_number)
+        except Exception as manual_error:
+            logger.error(f"Manual docx processing failed: {manual_error}")
+            print(f"Error: {manual_error}")
+            sys.exit(1)
+    else:
+        # Step 1: Fetch data for all incidents from database
+        logger.info("=" * 50)
+        logger.info("STEP 1: Fetching data from database")
+        logger.info("=" * 50)
+        
+        for incident_number in incident_numbers:
+            if fetch_incident_data(incident_number):
+                successful_incidents.append(incident_number)
+            else:
+                logger.warning(f"Skipping incident {incident_number} due to fetch failure")
+                print(f"Skipping incident {incident_number} due to fetch failure")
+        
+        if not successful_incidents:
+            logger.error("No incidents were successfully fetched. Exiting.")
+            print("No incidents were successfully fetched. Exiting.")
+            sys.exit(1)
+        
+        logger.info(f"Successfully fetched data for {len(successful_incidents)} incident(s): {successful_incidents}")
+        print(f"Successfully fetched data for {len(successful_incidents)} incident(s): {', '.join(successful_incidents)}")
 
-    if not successful_incidents:
-        logger.error("No incidents were successfully processed. Exiting.")
-        print("No incidents were successfully processed. Exiting.")
-        sys.exit(1)
+        # Step 2: Process CSV to JSON for all successful incidents
+        logger.info("=" * 50)
+        logger.info("STEP 2: Converting CSV to JSON")
+        logger.info("=" * 50)
+        
+        for incident_number in list(successful_incidents):
+            try:
+                process_incident_to_json(incident_number)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error processing incident {incident_number} to JSON: {e}")
+                print(f"Error processing incident {incident_number} to JSON: {e}")
+                successful_incidents.remove(incident_number)
+        
+        if not successful_incidents:
+            logger.error("No incidents were successfully processed. Exiting.")
+            print("No incidents were successfully processed. Exiting.")
+            sys.exit(1)
 
     # Step 3: Combine data from all incidents
     logger.info("=" * 50)
@@ -958,8 +1215,8 @@ def main():
         ai_cmd = [
             sys.executable, "processor.py", combined_json_path, "--prompt-type", prompt_type, "--multi-incident"
         ]
-        if not enable_team_analysis:
-            ai_cmd.append("--no-team-analysis")
+        if enable_team_analysis:
+            ai_cmd.append("--teams")
     elif len(successful_incidents) > 1:
         logger.info("Combining multiple incidents for unified processing...")
         combined_json_path = combine_incident_data(successful_incidents)
@@ -1006,8 +1263,8 @@ def main():
             ai_cmd = [
                 sys.executable, "processor.py", combined_json_path, "--prompt-type", prompt_type, "--multi-incident"
             ]
-            if not enable_team_analysis:
-                ai_cmd.append("--no-team-analysis")
+            if enable_team_analysis:
+                ai_cmd.append("--teams")
             
             logger.info(f"Falling back to subprocess: {' '.join(ai_cmd)}")
             
@@ -1074,8 +1331,8 @@ def main():
                 ai_cmd.extend(["--articles-embeddings", articles_embeddings])
             if vector_db_path:
                 ai_cmd.extend(["--vector-db-path", vector_db_path])
-            if not enable_team_analysis:
-                ai_cmd.append("--no-team-analysis")
+            if enable_team_analysis:
+                ai_cmd.append("--teams")
             
             logger.info(f"Falling back to subprocess: {' '.join(ai_cmd)}")
             

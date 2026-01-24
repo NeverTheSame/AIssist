@@ -4,6 +4,7 @@ import sys
 from datetime import datetime
 import os
 import logging
+import base64
 from bs4 import BeautifulSoup
 from docx import Document
 from openai import AzureOpenAI
@@ -150,18 +151,26 @@ def parse_multi_section_csv(file_path):
     
     return sections
 
-def dump_discussion_items_to_json(discussion_items, incident_number, output_dir="processed_incidents", summary_content=None):
-    """Dump incidents to a JSON file in a clean format, including internal AI summary if provided. (No summary field in output)"""
+def dump_discussion_items_to_json(discussion_items, incident_number, output_dir="processed_incidents", summary_content=None, summary_images=None):
+    """Dump incidents to a JSON file in a clean format, including internal AI summary if provided. (No summary field in output)
+
+    Args:
+        discussion_items: List of discussion items
+        incident_number: Incident ID
+        output_dir: Output directory path
+        summary_content: Text summary content (optional)
+        summary_images: List of image dicts with 'type', 'mime_type', 'data_url' keys (optional)
+    """
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Clean summary content if provided
     cleaned_summary = None
     if summary_content:
         logger.info("Cleaning summary content...")
         cleaned_summary = clean_html_content(summary_content)
         logger.info(f"Summary content cleaned. Original length: {len(summary_content)}, Cleaned length: {len(cleaned_summary)}")
-    
+
     # Format the data for AI processing
     formatted_discussion_items = []
     filtered_count = 0
@@ -172,32 +181,32 @@ def dump_discussion_items_to_json(discussion_items, incident_number, output_dir=
             clean_content = clean_html_content(raw_content)
         else:
             clean_content = ''
-        
+
         # Get author information
         author = discussion_item.get('ChangedBy') or discussion_item.get('author')
-        
+
         # Filter out unwanted entries
         # Skip entries with author "gautosvc" and content starting with "Support ICM enrichment CEM MDE"
         if author == "gautosvc" and clean_content.startswith("Support ICM enrichment CEM MDE"):
             logger.info(f"Filtering out gautosvc entry with Support ICM enrichment content")
             filtered_count += 1
             continue
-        
+
         formatted_discussion_item = {
             "timestamp": discussion_item.get('Date') or discussion_item.get('timestamp'),
             "author": author,
             "content": clean_content
         }
         formatted_discussion_items.append(formatted_discussion_item)
-    
+
     # Sort by timestamp
     formatted_discussion_items.sort(key=lambda x: x['timestamp'])
-    
 
-    
+
+
     # Create the output file (without 'incident_' prefix)
     output_file = os.path.join(output_dir, f"{incident_number}.json")
-    
+
     # Write to file (no summary field)
     with open(output_file, 'w', encoding='utf-8') as f:
         output_data = {
@@ -205,19 +214,24 @@ def dump_discussion_items_to_json(discussion_items, incident_number, output_dir=
             "total_entries": len(formatted_discussion_items),
             "conversation": formatted_discussion_items
         }
-        
+
         # Add cleaned summary if available
         if cleaned_summary:
             output_data["summary"] = cleaned_summary
             logger.info(f"Added cleaned summary to output (length: {len(cleaned_summary)})")
             print(f"[transformer] Final summary saved ({len(cleaned_summary)} chars)")
 
-        
+        # Add summary images if available (multimodal data)
+        if summary_images:
+            output_data["summary_images"] = summary_images
+            logger.info(f"Added {len(summary_images)} images to output (multimodal data)")
+            print(f"[transformer] Added {len(summary_images)} screenshot(s) to output")
+
         json.dump(output_data, f, indent=2, ensure_ascii=False)
-    
+
     logger.info(f"Processed {len(formatted_discussion_items)} entries (filtered out {filtered_count} unwanted entries)")
     print(f"✅ Created: {output_file}")
-    
+
     return output_file, filtered_count
 
 def is_summary_redacted(summary_content):
@@ -293,6 +307,98 @@ def extract_text_from_docx(docx_path):
         except Exception as e2:
             logger.error(f"Error reading manual file as text: {e2}")
             raise Exception(f"Failed to extract text from manual file: {e2}")
+
+def extract_images_from_docx(docx_path):
+    """
+    Extract images from a DOCX file and return them as base64-encoded data URLs.
+    Returns a list of dictionaries with 'type' (image), 'mime_type', and 'data_url' keys.
+    Also extracts the text content from the document.
+
+    Args:
+        docx_path: Path to the DOCX file
+
+    Returns:
+        tuple: (text_content, images_list)
+            - text_content: String containing all text from the document
+            - images_list: List of dicts with image data
+    """
+    try:
+        logger.info(f"Extracting text and images from docx: {docx_path}")
+        doc = Document(docx_path)
+
+        # Extract text from all paragraphs
+        text_parts = []
+        for paragraph in doc.paragraphs:
+            if paragraph.text and paragraph.text.strip():
+                text_parts.append(paragraph.text.strip())
+
+        # Also extract text from tables if any
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    if cell.text and cell.text.strip():
+                        text_parts.append(cell.text.strip())
+
+        full_text = "\n".join(text_parts)
+        logger.info(f"Extracted {len(full_text)} characters of text from docx")
+
+        # Extract images from document relationships
+        images = []
+        image_relationships = doc.part.rels
+
+        # Get image relationships
+        for rel_id, rel in image_relationships.items():
+            if "image" in rel.target_ref:
+                try:
+                    # Get image data
+                    image_data = rel.target_part.blob
+
+                    # Encode to base64
+                    base64_data = base64.b64encode(image_data).decode('utf-8')
+
+                    # Determine MIME type from extension or content
+                    target_ref_lower = rel.target_ref.lower()
+                    if target_ref_lower.endswith('.png'):
+                        mime_type = 'image/png'
+                    elif target_ref_lower.endswith('.jpg') or target_ref_lower.endswith('.jpeg'):
+                        mime_type = 'image/jpeg'
+                    elif target_ref_lower.endswith('.gif'):
+                        mime_type = 'image/gif'
+                    elif target_ref_lower.endswith('.bmp'):
+                        mime_type = 'image/bmp'
+                    elif target_ref_lower.endswith('.webp'):
+                        mime_type = 'image/webp'
+                    else:
+                        # Default to PNG if unknown
+                        mime_type = 'image/png'
+
+                    # Create data URL
+                    data_url = f"data:{mime_type};base64,{base64_data}"
+
+                    images.append({
+                        'type': 'image',
+                        'mime_type': mime_type,
+                        'data_url': data_url,
+                        'size_bytes': len(image_data),
+                        'rel_id': rel_id
+                    })
+
+                    logger.info(f"Extracted image: {mime_type}, {len(image_data)} bytes, rel_id: {rel_id}")
+
+                except Exception as img_error:
+                    logger.warning(f"Failed to extract image from rel {rel_id}: {img_error}")
+                    continue
+
+        logger.info(f"Extracted {len(images)} images from docx")
+
+        if not full_text.strip():
+            logger.warning("Docx file appears to be empty or contains no extractable text")
+
+        return full_text, images
+
+    except Exception as e:
+        logger.error(f"Error extracting from docx: {e}")
+        raise Exception(f"Failed to extract text and images from docx: {e}")
 
 def extract_summary_from_docx_text(docx_text):
     """
@@ -420,25 +526,33 @@ def main():
             logger.info(f"Found authored summary content (length: {len(summary_content)})")
         
         # Check if summary is redacted
+        summary_images = None  # Track images extracted from manual.docx
+
         if summary_content and is_summary_redacted(summary_content):
             logger.warning(f"Detected redacted summary for incident {incident_number}")
             print(f"\n⚠️  WARNING: Authored summary for incident {incident_number} is REDACTED")
-            
+
             # Prompt user for manual.docx
             docx_path = prompt_user_for_docx(incident_number)
-            
+
             if docx_path:
                 try:
-                    # Extract text from docx
-                    docx_text = extract_text_from_docx(docx_path)
+                    # Extract text and images from docx
+                    docx_text, docx_images = extract_images_from_docx(docx_path)
                     logger.info(f"manual.docx path: {docx_path}")
                     logger.info(f"manual.docx extracted text length: {len(docx_text)}")
+                    logger.info(f"manual.docx extracted {len(docx_images)} image(s)")
                     preview_in = docx_text[:500].replace('\n', ' ').replace('\r', ' ')
-                    print(f"[transformer] Read manual.docx ({len(docx_text)} chars). Preview: {preview_in}")
-                    
+                    print(f"[transformer] Read manual.docx ({len(docx_text)} chars, {len(docx_images)} images). Preview: {preview_in}")
+
+                    # Store images for later use in dump_discussion_items_to_json
+                    summary_images = docx_images if docx_images else None
+                    if summary_images:
+                        print(f"📸 Extracted {len(summary_images)} screenshot(s) from manual.docx - will include in analysis")
+
                     # Use LLM to extract content from docx text
                     extracted_summary = extract_summary_from_docx_text(docx_text)
-                    
+
                     if extracted_summary:
                         # Replace redacted summary with extracted one
                         logger.info(f"Replacing redacted summary with extracted summary from docx")
@@ -456,7 +570,7 @@ def main():
                         else:
                             logger.warning("Could not extract summary from docx, proceeding with redacted summary")
                             print("⚠️  Could not extract summary from docx. Continuing with redacted summary.")
-                
+
                 except Exception as e:
                     logger.error(f"Error processing manual.docx: {e}")
                     print(f"❌ Error processing manual.docx: {e}")
@@ -464,13 +578,14 @@ def main():
                     # Continue with redacted summary if processing fails
             else:
                 print("⚠️  manual.docx not found at project root. Skipping manual extraction.")
-        
-        # Dump to JSON
+
+        # Dump to JSON (with images if available)
         output_file, filtered_count = dump_discussion_items_to_json(
-            discussion_items, 
+            discussion_items,
             incident_number,
             args.output_dir,
-            summary_content
+            summary_content,
+            summary_images=summary_images
         )
         
         print(f"\nProcessed incident data has been saved to: {output_file}")

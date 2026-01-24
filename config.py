@@ -51,10 +51,15 @@ class Config:
         self.ai_service_deployment_name = os.environ.get('AI_SERVICE_DEPLOYMENT_NAME')
         self.ai_service_api_version = os.environ.get('AI_SERVICE_API_VERSION')
         
-        # Database Configuration
+        # Database Configuration (ICM)
         self.database_cluster = os.environ.get('DATABASE_CLUSTER', 'https://your-cluster.kusto.windows.net')
         self.database_name = os.environ.get('DATABASE_NAME', 'YourDatabase')
         self.database_token_scope = os.environ.get('DATABASE_TOKEN_SCOPE', 'https://your-cluster.kusto.windows.net/.default')
+
+        # Microsoft Defender Backend Configuration (for device telemetry like HeartbeatLog)
+        self.defender_cluster = os.environ.get('DEFENDER_CLUSTER', '')
+        self.defender_database = os.environ.get('DEFENDER_DATABASE', '')
+        self.defender_token_scope = os.environ.get('DEFENDER_TOKEN_SCOPE', '')
         
         # Cost Configuration (for AI service)
         self.input_cost = float(os.environ.get('AI_SERVICE_INPUT_COST', '0.01'))  # Cost per 1K input tokens
@@ -66,6 +71,13 @@ class Config:
         
         # Article Search Configuration
         self.default_vector_db_path = os.environ.get('DEFAULT_ARTICLES_EMBEDDINGS_PATH')
+        self.vector_db_path = os.environ.get('VECTOR_DB_PATH')
+        self.articles_base_path = os.environ.get('ARTICLES_BASE_PATH')
+
+        # Azure DevOps Configuration
+        self.azure_devops_org = os.environ.get('AZURE_DEVOPS_ORG')
+        self.azure_devops_project = os.environ.get('AZURE_DEVOPS_PROJECT')
+        self.azure_devops_pat = os.environ.get('AZURE_DEVOPS_PAT')
         
         # Validate required configurations
         self._validate_config()
@@ -90,6 +102,12 @@ class Config:
                 f"Missing required AI Service environment variables: {', '.join(missing_vars)}. "
                 "Please check your .env file configuration."
             )
+        
+        # Validate Azure DevOps PAT if needed (optional, will be checked when Azure DevOps client is used)
+        if not self.azure_devops_pat:
+            # Don't raise error here, as Azure DevOps is only used for prev_act prompt type
+            # Will be checked when AzureDevOpsClient is initialized
+            pass
 
 # Create a global config instance
 config = Config() 

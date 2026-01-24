@@ -8,13 +8,18 @@ import requests
 from azure.identity import InteractiveBrowserCredential
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 import re
-from azure.kusto.data.exceptions import KustoNetworkError
+from azure.kusto.data.exceptions import KustoNetworkError, KustoServiceError
 from datetime import datetime
 import traceback
 from config import config
 
 # Token cache file
 TOKEN_CACHE_FILE = ".kusto_token_cache.json"
+
+# Retry configuration
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 2  # seconds
+MAX_RETRY_DELAY = 30  # seconds
 
 def _load_cached_token():
     """Load cached token from file if it exists and is still valid."""
@@ -217,6 +222,145 @@ def remove_img_data_tags(text):
     
     return processed_text
 
+def _is_retryable_error(error):
+    """
+    Check if an error is retryable (timeout, connection issues, throttling, etc.)
+    """
+    error_str = str(error).lower()
+    
+    # Check for HTTP 429 throttling errors (tuple format: (message, Response))
+    if isinstance(error, tuple) and len(error) >= 2:
+        # Check if second element is a Response object with status 429
+        if hasattr(error[1], 'status_code') and error[1].status_code == 429:
+            return True
+        # Also check the error message
+        if '429' in str(error) or 'throttled' in error_str:
+            return True
+    
+    # Check for timeout/connection errors
+    retryable_indicators = [
+        'timeout',
+        'connection',
+        'unavailable',
+        'socket',
+        'did not properly respond',
+        'failed to respond',
+        'subchannel',
+        'grpc',
+        'partial query failure',
+        'throttled',
+        '429',
+        'rate limit',
+        'too many requests'
+    ]
+    
+    # Check error message
+    if any(indicator in error_str for indicator in retryable_indicators):
+        return True
+    
+    # Check error type
+    if isinstance(error, (KustoNetworkError, ConnectionError, TimeoutError)):
+        return True
+    
+    # Check for KustoServiceError with retryable status codes
+    if isinstance(error, KustoServiceError):
+        # Some service errors might be retryable
+        if 'timeout' in error_str or 'connection' in error_str or 'throttled' in error_str:
+            return True
+    
+    return False
+
+def _create_kusto_client(cluster, token):
+    """Create a new Kusto client with fresh connection."""
+    kcsb = KustoConnectionStringBuilder.with_aad_user_token_authentication(cluster, token)
+    return KustoClient(kcsb)
+
+def _get_retry_delay(attempt, error):
+    """
+    Calculate retry delay based on attempt number and error type.
+    For throttling errors (429), use longer delays.
+    """
+    if error is None:
+        # Default delay if error is not available
+        return min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+    
+    error_str = str(error).lower()
+    is_throttling = 'throttled' in error_str or '429' in error_str or (
+        isinstance(error, tuple) and len(error) >= 2 and 
+        hasattr(error[1], 'status_code') and error[1].status_code == 429
+    )
+    
+    if is_throttling:
+        # For throttling, use longer delays: 5s, 15s, 30s
+        base_delay = 5
+        delay = min(base_delay * (3 ** (attempt - 1)), MAX_RETRY_DELAY)
+        # Check for Retry-After header if available
+        if isinstance(error, tuple) and len(error) >= 2:
+            response = error[1]
+            if hasattr(response, 'headers') and 'Retry-After' in response.headers:
+                try:
+                    retry_after = int(response.headers['Retry-After'])
+                    delay = max(delay, retry_after)
+                except (ValueError, TypeError):
+                    pass
+        return delay
+    else:
+        # For other errors, use exponential backoff: 2s, 4s, 8s
+        return min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+
+def _execute_query_with_retry(client, database, query, incident_number, max_retries=MAX_RETRIES):
+    """
+    Execute a Kusto query with retry logic and exponential backoff.
+    
+    Args:
+        client: KustoClient instance
+        database: Database name
+        query: Query string
+        incident_number: Incident number for logging
+        max_retries: Maximum number of retry attempts
+    
+    Returns:
+        Query response
+    
+    Raises:
+        Exception: If all retries fail
+    """
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                delay = _get_retry_delay(attempt, last_error)
+                error_type = "throttling" if 'throttled' in str(last_error).lower() or '429' in str(last_error) else "connection"
+                print(f"[kusto_fetcher] Retry attempt {attempt}/{max_retries - 1} after {delay}s delay ({error_type} error)...")
+                time.sleep(delay)
+            
+            response = client.execute(database, query)
+            if attempt > 0:
+                print(f"[kusto_fetcher] Query succeeded on retry attempt {attempt}")
+            return response
+            
+        except Exception as e:
+            last_error = e
+            error_str = str(e)
+            
+            # Check if error is retryable
+            if not _is_retryable_error(e):
+                # Non-retryable error - fail immediately
+                print(f"[kusto_fetcher] Non-retryable error: {error_str[:200]}")
+                raise
+            
+            # Log the retryable error
+            if attempt < max_retries - 1:
+                error_preview = error_str[:200]
+                print(f"[kusto_fetcher] Query failed (attempt {attempt + 1}/{max_retries}): {error_preview}...")
+            else:
+                # Last attempt failed
+                print(f"[kusto_fetcher] Query failed after {max_retries} attempts")
+    
+    # All retries exhausted
+    raise Exception(f"Query execution failed after {max_retries} attempts. Last error: {last_error}")
+
 def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms"):
     """
     Fetch incident details from Azure Data Explorer and save as CSV in incident-specific folder.
@@ -234,8 +378,8 @@ def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms")
     # Get valid token (cached if not expired)
     token = _get_valid_token()
     
-    kcsb = KustoConnectionStringBuilder.with_aad_user_token_authentication(cluster, token)
-    client = KustoClient(kcsb)
+    # Create initial client
+    client = _create_kusto_client(cluster, token)
 
     # Read and split KQL queries by blank line
     with open(kql_template_path, "r") as file:
@@ -277,8 +421,22 @@ def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms")
             writer.writerow([f"--- {section_headers[idx] if idx < len(section_headers) else 'Additional Result Set'} ---"])
             # Replace incident_number placeholder
             query_filled = query.replace("{incident_number}", str(incident_number))
-            # Execute query
-            response = client.execute(database, query_filled)
+            
+            # Execute query with retry logic
+            # Recreate client on each query to ensure fresh connections
+            try:
+                response = _execute_query_with_retry(client, database, query_filled, incident_number)
+            except Exception as e:
+                # If retry failed, try recreating the client and retrying once more
+                if _is_retryable_error(e):
+                    print(f"[kusto_fetcher] Recreating client and retrying query {idx + 1}...")
+                    # Get a fresh token in case it expired
+                    token = _get_valid_token()
+                    client = _create_kusto_client(cluster, token)
+                    response = _execute_query_with_retry(client, database, query_filled, incident_number, max_retries=2)
+                else:
+                    raise
+            
             table = response.primary_results[0]
             column_names = [col.column_name for col in table.columns]
             writer.writerow(column_names)
@@ -362,7 +520,12 @@ def main():
             logf.write("\n")
         sys.exit(1)  # Exit with error code to indicate failure
     except Exception as e:
-        concise_msg = f"[kusto_fetcher] Error: {e}"
+        error_str = str(e)
+        # Check if it's a timeout/connection error
+        if _is_retryable_error(e):
+            concise_msg = f"[kusto_fetcher] Connection/Timeout error after retries: {error_str[:500]}\n[WARNING] This may indicate network connectivity issues. Please ensure your VPN connection is active and try again."
+        else:
+            concise_msg = f"[kusto_fetcher] Error: {error_str[:500]}"
         print(concise_msg)
         # Log full stack trace to logs/fetcher.log
         os.makedirs("logs", exist_ok=True)

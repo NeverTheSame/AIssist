@@ -11,7 +11,7 @@ This tool is built for support teams to handle technical incidents more efficien
 ### Core Functionality
 - **Automated Incident Analysis**: Fetches incident data from databases and processes it through AI models
 - **Intelligent Summarization**: Generates various types of summaries including escalation notes, mitigation reports, and troubleshooting guides
-- **Context-Aware Processing**: Uses molecular context engineering and memory systems to provide more relevant and consistent analysis
+- **Context-Aware Processing**: Uses memory systems to provide more relevant and consistent analysis
 - **Article Search Integration**: Finds relevant troubleshooting articles and performs gap analysis against incident data
 - **Multi-Incident Support**: Processes single incidents or combines multiple related incidents for unified analysis
 
@@ -19,7 +19,6 @@ This tool is built for support teams to handle technical incidents more efficien
 - **Persistent Authentication**: Caches Azure authentication tokens to avoid repeated logins
 - **Screenshot Processing**: Automatically downloads and processes embedded screenshots from incident data
 - **Memory Integration**: Uses mem0 for persistent memory across sessions, learning from previous incidents
-- **Molecular Context**: Dynamically selects relevant examples to enhance prompt quality
 - **Gap Analysis**: Compares incident troubleshooting against knowledge base articles to identify missing steps
 - **Azure Router Integration**: Uses Azure Router with GPT-5 for all AI operations
 
@@ -48,7 +47,7 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 ### Stage 3: AI Analysis (`processor.py`)
 - **Purpose**: Generates intelligent summaries and insights using advanced AI models
 - **Features**:
-  - Molecular context engineering for enhanced prompts
+  - Context-aware processing for enhanced prompts
   - Memory integration for learning from previous incidents
   - Article search and gap analysis capabilities
   - Multiple prompt types for different use cases
@@ -102,7 +101,7 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 
 ### AI-Powered Analysis
 - **Intelligent Summarization**: Generates various types of summaries (escalation, mitigation, troubleshooting)
-- **Molecular Context Engineering**: Dynamically enhances prompts with relevant examples
+- **Context Engineering**: Dynamically enhances prompts with relevant examples
 - **Memory Integration**: Learns from previous incidents to provide better context
 - **Article Search**: Finds relevant troubleshooting articles using semantic search
 - **Gap Analysis**: Identifies missing troubleshooting steps by comparing against knowledge base
@@ -131,13 +130,6 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 3. **AI Analysis**: Processes data through AI models with context enhancement
 4. **Memory Storage**: Stores results for future context and learning
 5. **Output Generation**: Creates summaries, troubleshooting guides, and insights
-
-### Molecular Context Engineering
-The system uses a sophisticated molecular context engine that:
-- Extracts technical keywords from incident data
-- Matches against a database of curated examples
-- Dynamically enhances prompts with relevant context
-- Improves consistency and quality of AI responses
 
 ### Memory System
 - **Persistent Learning**: Stores processed incidents for future reference
@@ -177,17 +169,15 @@ pip install -r requirements.txt
 
 The system supports various prompt types for different analysis needs:
 
-### Molecular Prompt Types (Recommended)
-- **`escalation_molecular`**: Creates escalation summaries with dynamic examples
-- **`mitigation_molecular`**: Generates mitigation reports with contextual guidance
-- **`troubleshooting_molecular`**: Produces detailed troubleshooting guides
-- **`article_search_molecular`**: Finds relevant troubleshooting articles
-- **`troubleshooting_plan_molecular`**: Creates comprehensive troubleshooting plans
-- **`wait_time_molecular`**: Analyzes incident wait times by team
-- **`prev_act_molecular`**: Recommends preventative actions
-- **`weekly_insights_molecular`**: Generates weekly status updates
-- **`kb_article_molecular`**: Creates knowledge base articles and runbooks from incident data
-- **`improvement_analysis_molecular`**: Analyzes incidents for process improvement opportunities
+### Available Prompt Types
+- **`customer_pending_facilitation`**: Creates facilitation notes when incident is pending customer action
+- **`dev_pending_facilitation`**: Creates facilitation notes when incident is pending developer action
+- **`escalation`**: Creates escalation summaries with team recommendations
+- **`mitigation`**: Generates mitigation reports with structured troubleshooting sections
+- **`prev_act`**: Recommends preventative actions from a predefined taxonomy
+- **`article_search`**: Finds relevant troubleshooting articles from your knowledge base
+- **`create_prompt_for_logs_analyze`**: Creates tailored investigation prompts for log analysis
+- **`simplified_incident_explanation`**: Explains incidents in simple terms for non-experts
 
 ### Standard Prompt Types
 - **`escalation_plain`**: Basic escalation summaries
@@ -226,85 +216,32 @@ Create a `prompts.json` file with your prompt templates for different summarizat
 
 ```json
 {
-  "default": {
-    "system_prompt": "You are a helpful assistant that summarizes incident discussions. Focus on key points, decisions, and action items.",
-    "user_prompt": "Please provide a comprehensive summary of this incident discussion, highlighting the main points, any decisions made, and action items."
+  "customer_pending_facilitation": {
+    "system_prompt": "You are an expert at preparing technical facilitation notes...",
+    "user_prompt": "Create a facilitation note for this incident..."
+  },
+  "dev_pending_facilitation": {
+    "system_prompt": "You are an expert at preparing technical facilitation notes...",
+    "user_prompt": "Create a facilitation note for this incident..."
   },
   "escalation": {
     "system_prompt": "You are an expert at preparing technical incident escalations. Your role is to create clear, concise, and technically accurate summaries of unresolved incidents to hand off to engineering or specialized teams.",
     "user_prompt": "Summarize this incident for escalation to another team using exactly four paragraphs: 1) a short issue description, 2) relevant details including environmental context, 3) troubleshooting steps already taken, and 4) the customer's current goal or what support is needed to proceed."
   },
-  "escalation_molecular": {
-    "system_prompt": "You are an expert at preparing technical incident escalations. Your role is to create clear, concise, and technically accurate summaries of unresolved incidents to hand off to engineering or specialized teams.",
-    "user_prompt": "Summarize this incident for escalation to another team using exactly four paragraphs: 1) a short issue description, 2) relevant details including environmental context, 3) troubleshooting steps already taken, and 4) the customer's current goal or what support is needed to proceed.\n\nHere are examples of well-structured escalation summaries:\n\n[Examples will be dynamically injected from molecular_examples.json]",
-    "additional_guidelines": [
-      "Use abbreviated names, e.g. AV, PUA, etc.",
-      "Do not start with 'The issue involves' or 'The incident involves'. This is implicit.",
-      "Do not say 'The environment involves' or 'The environment consists of'. This is implicit."
-    ]
+  "mitigation": {
+    "system_prompt": "You are an expert at analyzing technical incidents...",
+    "user_prompt": "Generate a mitigation report for this incident..."
+  },
+  "prev_act": {
+    "system_prompt": "You are an expert at identifying preventative actions...",
+    "user_prompt": "Analyze this incident and recommend preventative actions..."
+  },
+  "article_search": {
+    "system_prompt": "You are an expert at finding relevant technical articles...",
+    "user_prompt": "Search for articles relevant to this incident..."
   }
 }
 ```
-
-**Note:** Molecular prompt types (ending with `_molecular`) will have examples dynamically injected from your `molecular_examples.json` file when used.
-
-#### 3. Molecular Examples (`molecular_examples.json`)
-
-Create a `molecular_examples.json` file with example incidents for dynamic context injection:
-
-```json
-{
-  "escalation_molecular": [
-    {
-      "keywords": ["agent", "crash", "endpoint", "protection"],
-      "severity": "high",
-      "category": "agent_issues",
-      "example": {
-        "input": "Agent crashes on system, telemetry shows errors, customer has multiple endpoints affected",
-        "output": "The customer is experiencing agent crashes affecting multiple endpoints in their environment. The crashes occur during protection scans and result in complete agent termination.\n\nThe issue is isolated to specific systems running agent version X.X.X. The customer environment consists of managed devices in a corporate setting with standard security policies. Telemetry data shows consistent error codes preceding each crash event.\n\nOur team performed agent log analysis, reviewed crash dumps, attempted agent reinstallation on affected systems, and verified system compatibility. We also checked for conflicting software and reviewed recent policy changes. The crash pattern persists across multiple reinstallation attempts.\n\nThe customer needs immediate resolution to restore endpoint protection on their fleet. They require either a hotfix, workaround, or rollback guidance to maintain security coverage while a permanent solution is developed."
-      }
-    }
-  ],
-  "mitigation_molecular": [
-    {
-      "keywords": ["performance", "cpu", "memory", "optimization"],
-      "severity": "medium",
-      "category": "performance_issues",
-      "example": {
-        "input": "High resource usage by security agent, affecting system performance",
-        "output": "Performance optimization was achieved through configuration adjustments and policy tuning. Resource usage returned to normal levels after implementing recommended settings."
-      }
-    }
-  ]
-}
-```
-
-#### 4. Technical Patterns (`technical_patterns.json`) - Optional
-
-Create a `technical_patterns.json` file to customize keyword extraction for incident classification:
-
-```json
-{
-  "technical_patterns": [
-    "\\b(agent|service|process)\\b",
-    "\\b(crash|error|failure|timeout)\\b",
-    "\\b(memory|cpu|performance)\\b",
-    "\\b(network|connectivity|firewall)\\b",
-    "\\b(sync|synchronization)\\b",
-    "\\b(authentication|auth)\\b",
-    "\\b(macos|windows|linux)\\b",
-    "\\b(policy|configuration)\\b",
-    "\\b(telemetry|reporting)\\b",
-    "\\b(installation|deployment)\\b",
-    "\\b(detection|engine)\\b",
-    "\\b(security|protection)\\b"
-  ],
-  "description": "Technical keyword patterns used for incident classification and molecular context selection.",
-  "usage": "Add or modify patterns to improve keyword extraction for your specific domain."
-}
-```
-
-**Note:** This file is optional. If not provided, the tool will use default patterns. Customize these patterns to better match your incident types and technical terminology.
 
 ### Environment Variables (.env)
 
@@ -324,6 +261,20 @@ AZURE_ROUTER_MODEL_NAME=gpt-5
 AZURE_KUSTO_CLUSTER=https://your-cluster.kusto.windows.net
 AZURE_KUSTO_DATABASE=YourDatabase
 AZURE_KUSTO_TOKEN_SCOPE=https://your-cluster.kusto.windows.net/.default
+```
+
+**Azure DevOps (Optional - for preventative actions workflow):**
+```
+AZURE_DEVOPS_ORG=your-organization
+AZURE_DEVOPS_PROJECT=your-project
+AZURE_DEVOPS_PAT=your-personal-access-token
+```
+
+**Article Search (Optional - for article search mode):**
+```
+DEFAULT_ARTICLES_EMBEDDINGS_PATH=/path/to/article_embeddings.json
+VECTOR_DB_PATH=/path/to/qdrant_db
+ARTICLES_BASE_PATH=/path/to/articles
 ```
 
 ## How to Run
@@ -346,14 +297,14 @@ python main.py 654045297
 
 Fetch, process, and summarize an incident with specific escalation prompt:
 ```bash
-python main.py 654045297 --prompt-type escalation_molecular
+python main.py 654045297 --prompt-type escalation
 ```
 
 All operations use Azure Router (GPT-5) by default.
 
 Process multiple incidents with unified summarization:
 ```bash
-python main.py 654045297 654045298 654045299 --prompt-type escalation_molecular
+python main.py 654045297 654045298 654045299 --prompt-type escalation
 ```
 
 Generate troubleshooting plan based on historical incidents:
@@ -364,20 +315,20 @@ python main.py 654045297 654045298 654045299 654045300 --troubleshooting-plan
 Generate weekly insights for multiple incidents (CRI Weekly Insights):
 ```bash
 # Process multiple incidents from scratch
-python3 main.py 667536660 686775744 693453104 698309282 698781262 --prompt-type weekly_insights_molecular
+python3 main.py 667536660 686775744 693453104 698309282 698781262 --prompt-type weekly_insights
 
 # Process from existing combined JSON file
-python3 main.py --multi-incident --input-file processed_incidents/incident_combined_667536660_686775744_693453104_698309282_698781262.json --prompt-type weekly_insights_molecular
+python3 main.py --multi-incident --input-file processed_incidents/incident_combined_667536660_686775744_693453104_698309282_698781262.json --prompt-type weekly_insights
 ```
 
 Generate knowledge base article from incident data:
 ```bash
-python main.py 654045297 --prompt-type kb_article_molecular
+python main.py 654045297 --prompt-type kb_article
 ```
 
 Analyze incident for improvement opportunities:
 ```bash
-python main.py 654045297 --prompt-type improvement_analysis_molecular
+python main.py 654045297 --prompt-type improvement_analysis
 ```
 
 Fetch VIP customer incidents:
@@ -395,25 +346,25 @@ python3 fetch_vip_incidents.py
 #### 1. Test with Sample Incident
 ```bash
 # Test with a known incident number
-python3 main.py 692076095 --prompt-type escalation_molecular
+python3 main.py 692076095 --prompt-type escalation
 ```
 
 #### 2. Test Different Prompt Types
 ```bash
 # Test escalation summaries
-python3 main.py 692076095 --prompt-type escalation_molecular
+python3 main.py 692076095 --prompt-type escalation
 
 # Test mitigation reports  
-python3 main.py 692076095 --prompt-type mitigation_molecular
+python3 main.py 692076095 --prompt-type mitigation
 
 # Test troubleshooting guides
-python3 main.py 692076095 --prompt-type troubleshooting_molecular
+python3 main.py 692076095 --prompt-type troubleshooting
 ```
 
 #### 3. Test Article Search Functionality
 ```bash
 # Test article search mode (requires vector database)
-python3 main.py 692076095 --prompt-type article_search_molecular
+python3 main.py 692076095 --prompt-type article_search
 ```
 
 #### 4. Test Memory Integration
@@ -426,8 +377,8 @@ python3 main.py 692076095  # Second run should use memory context
 #### 5. Test Different Prompt Types
 ```bash
 # Test different prompt types
-python3 main.py 692076095 --prompt-type escalation_molecular
-python3 main.py 692076095 --prompt-type mitigation_molecular
+python3 main.py 692076095 --prompt-type escalation
+python3 main.py 692076095 --prompt-type mitigation
 ```
 
 ### Validation Steps
@@ -466,10 +417,10 @@ The tool includes advanced article search functionality and gap analysis capabil
 
 ```bash
 # Search for relevant troubleshooting articles
-python3 main.py <incident_number> --prompt-type article_search_molecular --vector-db-path article_vector_db.json
+python3 main.py <incident_number> --prompt-type article_search --vector-db-path article_vector_db.json
 
 # Search using text files directly
-python3 main.py <incident_number> --prompt-type article_search_molecular --articles-path /path/to/articles
+python3 main.py <incident_number> --prompt-type article_search --articles-path /path/to/articles
 
 # Setup article search from text files
 python3 setup_article_search.py --setup /path/to/articles --output article_vector_db.json
@@ -493,7 +444,7 @@ The gap analysis feature compares incident troubleshooting steps against compreh
 - **Execution Plans**: Generates specific commands and expected outcomes
 
 #### Available Options
-- `--prompt-type TYPE`   Type of prompt (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, article_search_molecular, weekly_insights_molecular, etc.)
+- `--prompt-type TYPE`   Type of prompt (customer_pending_facilitation, dev_pending_facilitation, escalation, mitigation, prev_act, article_search, create_prompt_for_logs_analyze, simplified_incident_explanation)
 - All operations use Azure Router (GPT-5) by default
 - `--debug`              Enable API debugging
 - `--articles-path PATH` Path to directory containing troubleshooting articles (for article search mode)
@@ -504,8 +455,9 @@ The gap analysis feature compares incident troubleshooting steps against compreh
 - `--multi-incident`     Process multiple incidents directly from existing JSON file (requires --input-file)
 - `--input-file PATH`    Path to JSON file containing combined incident data (for use with --multi-incident)
 - `--timing`             Enable detailed timing analysis and reporting
+- `--teams`, `-t`        Enable team knowledge and team matching (disabled by default)
 
-**Note:** If no `--prompt-type` is specified, the tool will display an interactive menu showing only molecular prompt types for selection.
+**Note:** If no `--prompt-type` is specified, the tool will display an interactive menu showing only prompt types for selection.
 
 #### Manual Stage-by-Stage Processing
 You can also run each stage manually:
@@ -522,7 +474,7 @@ python transformer.py icms/654045297/654045297.csv
 
 **Stage 3: Generate AI insights**
 ```bash
-python processor.py processed_incidents/654045297.json --prompt-type escalation_molecular
+python processor.py processed_incidents/654045297.json --prompt-type escalation
 ```
 
 ### How It Works
@@ -545,37 +497,15 @@ The tool follows a three-stage pipeline:
 #### Stage 3: AI Analysis (`processor.py`)
 1. **For single incidents**: Processes and summarizes the incident using Azure Router (GPT-5).
 2. **For multiple incidents**: Combines all incident data and generates a unified summary.
-3. **For troubleshooting plan mode**: Analyzes the first incident as the primary issue and uses other incidents as historical references to generate a comprehensive troubleshooting plan.
-4. **For weekly insights mode**: Processes multiple incidents with focus on active days, blockers, and overall delay analysis.
-5. **Outputs results** to the appropriate directories (`processed_incidents/`, `summaries/`).
-6. **If a `_molecular` prompt type is used**, the tool dynamically selects relevant examples from `molecular_examples.json` and injects them into the prompt for improved context and summary quality.
+3. **Outputs results** to the appropriate directories (`processed_incidents/`, `summaries/`).
 
 ### Troubleshooting Plan Mode
 
-The `--troubleshooting-plan` mode is designed to help create comprehensive troubleshooting plans for unresolved incidents by analyzing patterns from previously resolved similar incidents.
-
-**How it works:**
-1. **Primary Incident**: The first incident number provided is treated as the current unresolved issue that needs a troubleshooting plan.
-2. **Historical References**: All subsequent incident numbers are treated as resolved incidents that contain valuable insights and successful resolution strategies.
-3. **Pattern Analysis**: The AI analyzes the historical incidents to identify common root causes, successful troubleshooting approaches, and resolution strategies.
-4. **Plan Generation**: Based on the patterns found, it creates a structured, step-by-step troubleshooting plan specifically tailored to the primary incident.
-
-**Example workflow:**
-```bash
-# Generate troubleshooting plan for incident 1111 using insights from resolved incidents 22222, 33333, 4444
-python main.py 1111 22222 33333 4444 --troubleshooting-plan
-```
-
-**Output includes:**
-- Primary incident analysis
-- Pattern analysis from historical incidents
-- Step-by-step troubleshooting plan
-- Risk assessment for each step
-- Success criteria and escalation points
+**Note:** The troubleshooting plan mode has been removed. The `troubleshooting_plan` prompt type is no longer available.
 
 ### Weekly Insights Mode (CRI Weekly Insights)
 
-The `weekly_insights_molecular` prompt is designed to create concise, actionable weekly status updates for multiple ongoing technical incidents, focusing on longest-running incidents and their blockers.
+The `weekly_insights` prompt is designed to create concise, actionable weekly status updates for multiple ongoing technical incidents, focusing on longest-running incidents and their blockers.
 
 **Features:**
 - **Active Days Calculation**: Automatically calculates and displays the number of days each incident has been active
@@ -593,12 +523,12 @@ The `weekly_insights_molecular` prompt is designed to create concise, actionable
 
 Process multiple incidents from scratch:
 ```bash
-python3 main.py 667536660 686775744 693453104 698309282 698781262 --prompt-type weekly_insights_molecular
+python3 main.py 667536660 686775744 693453104 698309282 698781262 --prompt-type weekly_insights
 ```
 
 Process from existing combined JSON file (when you already have processed incident data):
 ```bash
-python3 main.py --multi-incident --input-file processed_incidents/incident_combined_667536660_686775744_693453104_698309282_698781262.json --prompt-type weekly_insights_molecular
+python3 main.py --multi-incident --input-file processed_incidents/incident_combined_667536660_686775744_693453104_698309282_698781262.json --prompt-type weekly_insights
 ```
 
 **Output Format:**
@@ -642,22 +572,6 @@ The summarizer includes memory integration using [mem0](https://github.com/mem0a
 - **Learning Over Time**: Becomes more effective at identifying patterns as more incidents are processed
 - **Cross-Session Persistence**: Memory persists across different processing sessions
 
-### Memory vs Molecular Examples
-
-**Molecular Examples** (`molecular_examples.json`):
-- Curated, high-quality examples you manually select
-- Immediate availability and consistent quality
-- Organized by prompt type with keywords and categories
-- Best for: Standard scenarios and quality control
-
-**Mem0 Memory**:
-- Automatically learns from every processed incident
-- Builds up over time with real processing results
-- Provides dynamic, contextual relevance
-- Best for: Learning from actual outcomes and patterns
-
-**Integration**: When both are used together, molecular examples provide the foundation, and memory adds real-world context from your actual processing history.
-
 ### Vector Database Architecture
 
 The summarizer uses Qdrant as its vector database, which provides several key benefits:
@@ -685,7 +599,7 @@ The summarizer uses Qdrant as its vector database, which provides several key be
 Memory is enabled by default. Simply run your processor as usual:
 
 ```bash
-python processor.py incident.json --prompt-type escalation_molecular
+python processor.py incident.json --prompt-type escalation
 ```
 
 The processor will automatically:
@@ -753,20 +667,13 @@ Configure memory behavior using `memory_config.json`:
     "enabled": true,
     "priority": "complementary",
     "max_memory_context_length": 1000,
-    "memory_search_limit": 3,
-    "enable_memory_for_molecular": true
-  },
-  "molecular_integration": {
-    "preserve_molecular_examples": true,
-    "molecular_examples_priority": "high",
-    "allow_memory_enhancement": true
+    "memory_search_limit": 3
   }
 }
 ```
 
 **Key Settings**:
 - `enabled`: Enable/disable memory integration
-- `enable_memory_for_molecular`: Whether to use memory with molecular prompts
 - `max_memory_context_length`: Maximum length of memory context
 - `memory_search_limit`: Number of relevant memories to include
 
@@ -789,17 +696,6 @@ Previous similar incidents:
 Use this context to provide more informed and consistent analysis.
 ```
 
-**Enhanced Prompt (with Molecular + Memory)**:
-```
-[Your molecular examples here]
-
-Additional context from previous similar incidents:
-Previous similar incidents:
-1. Incident INC-001: Security incident resolved by implementing MFA and blocking suspicious IPs.
-
-Use this additional context alongside the provided examples for more informed analysis.
-```
-
 ### Memory File Management
 
 - **Automatic Creation**: Memory directory is created automatically when needed
@@ -808,21 +704,17 @@ Use this additional context alongside the provided examples for more informed an
 - **Flexible**: Easy to manage and backup memory data
 - **Manual Control**: You can manually inspect, edit, or delete memory files if needed
 
-## Customizing Prompts and Molecular Context
+## Customizing Prompts and Context
 
 ### Prompt Templates (`prompts.json`)
 - The `prompts.json` file contains the base prompt templates (system and user prompts) for each supported prompt type.
 - You can add or edit prompt types here to control the instructions and formatting sent to the LLM.
-- Example prompt types: `default`, `escalation`, `mitigation`, `escalation_molecular`, etc.
 
-### Molecular Examples (`molecular_examples.json`)
-- The `molecular_examples.json` file contains example incidents (input/output pairs, keywords, categories) used for dynamic context injection.
-- When a prompt type ending with `_molecular` is used, the tool selects the most relevant examples from this file and appends them to the prompt.
-- **To add or edit examples:**
-  1. Open `molecular_examples.json` in your editor.
-  2. Add new examples under the appropriate key (e.g., `escalation_molecular`, `mitigation_molecular`).
-  3. Each example should include `keywords`, `severity`, `category`, and an `example` object with `input` and `output` fields.
-- This allows the summarizer to adapt its context to the specifics of each incident, improving the quality and relevance of generated summaries.
+### Interactive Menu Configuration (`interactive_menu_prompts.json`)
+- This file defines which prompts appear in the interactive menu with their associated emojis.
+- Add or remove entries to control what users see when no prompt type is specified.
+- Format: `{"prompt_type": "📱"}`
+- Only prompts listed here will appear in the interactive selection menu.
 
 ## Folder Structure
 
@@ -866,8 +758,7 @@ memory/                          # Memory storage (git-ignored)
 - If you are prompted to authenticate every time, ensure `.kusto_token_cache.json` is writable and not deleted between runs.
 - If you see OpenAI API key errors, ensure your `.env` is set up for Azure OpenAI (not regular OpenAI).
 - For Kusto query issues, check your `query.kql` template and Azure permissions.
-- If you encounter errors about missing or malformed `molecular_examples.json`, ensure the file exists and is valid JSON.
-- If the interactive prompt menu doesn't appear, ensure `prompts.json` contains molecular prompt types (ending with `_molecular`).
+- If the interactive prompt menu doesn't appear, ensure `interactive_menu_prompts.json` exists and contains valid prompt types.
 - If `transformer.py` can't find CSV files, check that they're in the new incident-specific folders (e.g., `icms/664099798/664099798.csv`).
 - For screenshot download issues, ensure the incident data contains valid data URLs and the output directories are writable.
 - **Memory Issues**: If memory isn't working, check that `memory_config.json` exists and `enabled` is set to `true`, or verify that the `--no-memory` flag is not being used.
@@ -906,12 +797,12 @@ Summarizer/
 │   ├── logs-analysis-protocol.md  # Log analysis procedures
 │   └── unified-mcp-complete-guide.md  # Complete MCP guide
 ├── article_searcher.py        # Article search and vector operations
+├── azure_devops_client.py     # Azure DevOps API client for work items
 ├── gap_analysis.py            # Advanced gap analysis functionality
 ├── simple_gap_analysis.py     # Simplified gap analysis tool
 ├── config.py                  # Configuration management
 ├── prompts.json               # AI prompt templates
-├── molecular_examples.json    # Dynamic context examples
-├── technical_patterns.json    # Keyword extraction patterns
+├── interactive_menu_prompts.json  # Interactive menu configuration with emojis
 ├── query.kql                  # Kusto query template
 ├── requirements.txt           # Python dependencies
 ├── AGENTS.md                  # Agent guidelines and rules
@@ -925,7 +816,7 @@ Summarizer/
 ## Recent Improvements
 
 ### Knowledge Base Article Generation (Latest)
-- **KB Article Creation**: New `kb_article_molecular` prompt creates comprehensive runbooks from incident data
+- **KB Article Creation**: New `kb_article` prompt creates comprehensive runbooks from incident data
 - **Runbook Best Practices**: Follows industry standards with structured sections including purpose, scope, prerequisites, and validation steps
 - **Incident-Based Content**: Uses only actual troubleshooting steps performed in incidents for accuracy
 - **Comprehensive Structure**: Includes title, purpose, scope, prerequisites, symptoms, root cause, troubleshooting procedure, resolution, verification, and prevention sections

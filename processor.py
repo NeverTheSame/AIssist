@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 import logging
 import pandas as pd
@@ -12,9 +13,6 @@ import tiktoken
 from config import config
 import argparse
 from typing import List, Dict, Any
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
 # Mock ZaiClient for now - you can replace this with actual ZAI client when needed
 class ZaiClient:
     def __init__(self, api_key=None, base_url=None):
@@ -44,9 +42,11 @@ class ZaiClient:
                         self.total_tokens = 500
             
             return MockResponse()
-from memory.memory_manager import SummarizerMemoryManager
+# Memory manager imported lazily in __init__ to avoid PyTorch dependency issues
+# from memory.memory_manager import SummarizerMemoryManager
 from article_searcher import ArticleSearcher
-from team_knowledge.teams_matcher import TeamDetector, TeamKnowledgeManager, TeamAnalyzer, TeamLearningEngine
+from team_knowledge.teams_matcher import TeamDetector, TeamAnalyzer, TeamLearningEngine
+from team_knowledge.team_knowledge_manager import TeamKnowledgeManager
 # Timing utilities imported conditionally in __init__
 
 def run_gap_analysis_inline(incident_id: str, articles: List[Dict[str, Any]], articles_path: str = None, vector_db_path: str = None):
@@ -159,156 +159,12 @@ logger = setup_logging()
 # Token costs are now configurable via .env file
 # See config.py for ZAI_INPUT_COST, ZAI_OUTPUT_COST, OPENAI_INPUT_COST, OPENAI_OUTPUT_COST
 
-class MolecularContextEngine:
-    """
-    Dynamic molecule construction for incident processing.
-    Selects most relevant examples based on incident characteristics.
-    """
-    
-    def __init__(self):
-        logger.info("Initializing MolecularContextEngine and loading example database from molecular_examples.json.")
-        try:
-            with open("molecular_examples.json", "r", encoding="utf-8") as f:
-                self.example_database = json.load(f)
-            logger.info(f"Loaded molecular example database with keys: {list(self.example_database.keys())}")
-        except Exception as e:
-            logger.error(f"Failed to load molecular_examples.json: {e}")
-            self.example_database = {}
-    
-    def extract_keywords(self, text: str) -> List[str]:
-        """Extract key technical terms from incident text."""
-        logger.info(f"[MolecularContextEngine] Extracting keywords from text: {text[:100]}{'...' if len(text) > 100 else ''}")
-        
-        # Load technical patterns from configuration file
-        technical_patterns = self._load_technical_patterns()
-        
-        keywords = []
-        text_lower = text.lower()
-        
-        for pattern in technical_patterns:
-            matches = re.findall(pattern, text_lower)
-            keywords.extend(matches)
-        result = list(set(keywords))
-        logger.info(f"[MolecularContextEngine] Extracted keywords: {result}")
-        return result
-    
-    def _load_technical_patterns(self) -> List[str]:
-        """Load technical patterns from configuration file."""
-        try:
-            with open("technical_patterns.json", "r", encoding="utf-8") as f:
-                patterns_config = json.load(f)
-                return patterns_config.get("technical_patterns", [])
-        except FileNotFoundError:
-            logger.warning("technical_patterns.json not found, using default patterns")
-            return self._get_default_patterns()
-        except Exception as e:
-            logger.error(f"Error loading technical_patterns.json: {e}, using default patterns")
-            return self._get_default_patterns()
-    
-    def _get_default_patterns(self) -> List[str]:
-        """Get default technical patterns if configuration file is not available."""
-        return [
-            r'\b(agent|service|process)\b',
-            r'\b(crash|error|failure|timeout)\b',
-            r'\b(memory|cpu|performance)\b',
-            r'\b(network|connectivity|firewall)\b',
-            r'\b(sync|synchronization)\b',
-            r'\b(authentication|auth)\b',
-            r'\b(macos|windows|linux)\b',
-            r'\b(policy|configuration)\b',
-            r'\b(telemetry|reporting)\b',
-            r'\b(installation|deployment)\b',
-            r'\b(detection|engine)\b',
-            r'\b(security|protection)\b'
-        ]
-    
-    def select_relevant_examples(self, incident_text: str, prompt_type: str, max_examples: int = 5) -> List[Dict]:
-        """Select most relevant examples based on incident content."""
-        logger.info(f"[MolecularContextEngine] Selecting relevant examples for prompt_type='{prompt_type}' and incident_text: {incident_text[:100]}{'...' if len(incident_text) > 100 else ''}")
-        if prompt_type not in self.example_database:
-            logger.warning(f"[MolecularContextEngine] Prompt type '{prompt_type}' not found in example database.")
-            return []
-        
-        incident_keywords = self.extract_keywords(incident_text)
-        examples = self.example_database[prompt_type]
-        
-        # Calculate relevance scores
-        scored_examples = []
-        for example in examples:
-            # Keyword overlap score
-            overlap = len(set(incident_keywords) & set(example['keywords']))
-            keyword_score = overlap / len(example['keywords']) if example['keywords'] else 0
-            
-            # Text similarity score using TF-IDF
-            try:
-                vectorizer = TfidfVectorizer(stop_words='english')
-                vectors = vectorizer.fit_transform([incident_text, example['example']['input']])
-                similarity_score = cosine_similarity(vectors[0:1], vectors[1:2])[0][0]
-            except Exception as e:
-                logger.warning(f"[MolecularContextEngine] TF-IDF similarity calculation failed: {e}")
-                similarity_score = 0
-            
-            # Combined relevance score
-            relevance_score = (keyword_score * 0.6) + (similarity_score * 0.4)
-            
-            scored_examples.append({
-                'example': example['example'],
-                'score': relevance_score,
-                'category': example['category']
-            })
-        
-        # Sort by relevance and return top examples
-        scored_examples.sort(key=lambda x: x['score'], reverse=True)
-        selected = scored_examples[:max_examples]
-        logger.info(f"[MolecularContextEngine] Selected {len(selected)} relevant examples (top {max_examples}): {[ex['category'] for ex in selected]}")
-        return selected
-    
-    def construct_molecular_prompt(self, base_prompt: str, incident_text: str, prompt_type: str):
-        """Construct dynamic molecular prompt with relevant examples. Returns (prompt, num_examples_used)."""
-        logger.info(f"[MolecularContextEngine] Constructing molecular prompt for prompt_type='{prompt_type}'. Base prompt length: {len(base_prompt)}. Incident text length: {len(incident_text)}.")
-        relevant_examples = self.select_relevant_examples(incident_text, prompt_type)
-        if not relevant_examples:
-            logger.info("[MolecularContextEngine] No relevant examples found. Returning base prompt.")
-            return base_prompt, 0
-        
-        # Build examples text
-        examples_text = "\n\nRelevant examples for context:\n"
-        for i, example_data in enumerate(relevant_examples, 1):
-            example = example_data['example']
-            examples_text += f"\nExample {i}:\n"
-            examples_text += f"Input: {example['input']}\n"
-            examples_text += f"Output: {example['output']}\n"
-        examples_text += "\nNow process the following incident:\n"
-        
-        # Combine base prompt with examples
-        final_prompt = base_prompt + examples_text
-        
-        logger.info(f"[MolecularContextEngine] Constructed molecular prompt. Final prompt length: {len(final_prompt)}. Preview: {final_prompt[:200]}{'...' if len(final_prompt) > 200 else ''}")
-        return final_prompt, len(relevant_examples)
-
-    def get_all_categories(self):
-        """Get all unique categories from molecular examples"""
-        try:
-            with open("molecular_examples.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-                all_categories = set()
-                for section_name, examples in data.items():
-                    for example in examples:
-                        category = example.get("category", "")
-                        if category:
-                            all_categories.add(category)
-                return sorted(all_categories)
-        except Exception as e:
-            print(f"Could not load categories: {e}")
-            return []
-
 class IncidentProcessor:
     def __init__(self, enable_memory=True, articles_path=None, vector_db_path=None, enable_team_analysis=False, enable_timing=False):
         # Always use Azure Router (GPT-5)
         self.use_azure_router = True
         self.enable_timing = enable_timing
-        self.molecular_engine = MolecularContextEngine()
-        
+
         # Import timing utilities if timing is enabled
         if enable_timing:
             from timing_utils import time_operation, time_context, time_llm_call, time_memory_operation, time_team_analysis
@@ -335,10 +191,11 @@ class IncidentProcessor:
             self.time_team_analysis = no_op_context
         # REMOVED: self.doc_processor = DocumentProcessor()
         
-        # Initialize memory manager if enabled
+        # Initialize memory manager if enabled (lazy import to avoid PyTorch dependency issues)
         self.memory_manager = None
         if enable_memory:
             try:
+                from memory.memory_manager import SummarizerMemoryManager
                 self.memory_manager = SummarizerMemoryManager()
                 logger.info("Memory manager initialized successfully")
             except Exception as e:
@@ -382,10 +239,14 @@ class IncidentProcessor:
                    config.ai_service_api_version, config.ai_service_deployment_name]):
             raise ValueError("AI Service configuration is incomplete. Please check your .env file.")
         
+        # Set default timeout to 300 seconds (5 minutes) to prevent indefinite hangs
+        self.llm_timeout = 300
+        
         self.client = AzureOpenAI(
             api_key=config.ai_service_api_key,
             api_version=config.ai_service_api_version,
-            azure_endpoint=config.ai_service_endpoint
+            azure_endpoint=config.ai_service_endpoint,
+            timeout=self.llm_timeout
         )
         self.deployment_name = config.ai_service_deployment_name
         self.model_costs = {
@@ -401,8 +262,7 @@ class IncidentProcessor:
                     self.team_detector, 
                     self.team_knowledge_manager,
                     llm_client=self.client,
-                    deployment_name=getattr(self, 'deployment_name', None),
-                    use_azure_router=True
+                    deployment_name=getattr(self, 'deployment_name', None)
                 )
                 logger.info("Team analyzer initialized with LLM client")
                 
@@ -411,8 +271,7 @@ class IncidentProcessor:
                     self.team_knowledge_manager,
                     self.team_detector,
                     llm_client=self.client,
-                    deployment_name=getattr(self, 'deployment_name', None),
-                    use_azure_router=True
+                    deployment_name=getattr(self, 'deployment_name', None)
                 )
                 logger.info("Team learning engine initialized with LLM client")
             except Exception as e:
@@ -475,57 +334,164 @@ class IncidentProcessor:
         
         return cleaned_text.strip()
 
-    def format_conversation_with_ai_summary(self, conversation, internal_ai_summary=None, summary=None):
-        """Format conversation and authored summary for the AI model."""
+    def _read_teams_discussion_csv(self, csv_path="teams_discussion.csv"):
+        """Read Teams discussion CSV file and format it for inclusion in prompts."""
+        try:
+            if not os.path.exists(csv_path):
+                logger.warning(f"Teams discussion CSV not found: {csv_path}")
+                return None
+            
+            import csv
+            teams_discussions = []
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    date = row.get('Date', '')
+                    time = row.get('Time', '')
+                    sender = row.get('Sender', '')
+                    message = row.get('Message', '')
+                    
+                    # Combine date and time into timestamp
+                    timestamp = f"{date} {time}" if date and time else date or time
+                    teams_discussions.append({
+                        'timestamp': timestamp,
+                        'sender': sender,
+                        'message': message
+                    })
+            
+            if not teams_discussions:
+                logger.warning("Teams discussion CSV is empty")
+                return None
+            
+            # Format Teams discussions
+            formatted_teams = []
+            for entry in teams_discussions:
+                formatted_teams.append(f"[{entry['timestamp']}] {entry['sender']}: {entry['message']}")
+            
+            teams_text = "\n".join(formatted_teams)
+            logger.info(f"Loaded {len(teams_discussions)} Teams discussion entries from {csv_path}")
+            return teams_text
+            
+        except Exception as e:
+            logger.error(f"Error reading Teams discussion CSV: {e}")
+            return None
+
+    def format_conversation_with_ai_summary(self, conversation, internal_ai_summary=None, summary=None, teams_discussion=None, summary_images=None):
+        """Format conversation and authored summary for the AI model.
+
+        Returns a list of content items for multimodal messages:
+        - If summary_images exist: returns list of dicts with 'type' and 'content'/'image_url'
+        - Otherwise: returns a string (text only) for backward compatibility
+        """
         formatted = []
         for entry in conversation:
             # Clean the content to remove Azure Support Center info
             cleaned_content = self.clean_azure_support_info(entry['content'])
             formatted.append(f"[{entry['timestamp']}] {entry['author']}: {cleaned_content}")
         conversation_text = "\n".join(formatted)
-        
+
+        # Build the output text parts
+        parts = []
+
         # Add authored summary if available (before conversation)
         if summary:
             # Clean the summary text
             cleaned_summary = self.clean_azure_support_info(summary)
-            return f"--- Authored Summary ---\n{cleaned_summary}\n\n{conversation_text}"
-        
-        return conversation_text
+            parts.append(f"--- Authored Summary ---\n{cleaned_summary}")
+
+        # Add ICM conversation
+        parts.append(f"--- ICM Discussion ---\n{conversation_text}")
+
+        # Add Teams discussion if available
+        if teams_discussion:
+            parts.append(f"--- Teams Discussion ---\n{teams_discussion}")
+
+        # Combine all text parts
+        combined_text = "\n\n".join(parts)
+
+        # Return multimodal content if images are present, otherwise return text string
+        if summary_images and len(summary_images) > 0:
+            # Build multimodal content list
+            multimodal_content = []
+
+            # Add introductory text (note: Azure OpenAI uses 'text' key, not 'content')
+            multimodal_content.append({
+                "type": "text",
+                "text": combined_text
+            })
+
+            # Add instruction text before images
+            multimodal_content.append({
+                "type": "text",
+                "text": "\n\n--- Screenshots from manual.docx ---\nPlease analyze the following screenshots for additional context:"
+            })
+
+            # Add each image
+            for img in summary_images:
+                multimodal_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": img['data_url']
+                    }
+                })
+
+            logger.info(f"Formatted multimodal content with {len(summary_images)} images")
+            return multimodal_content
+        else:
+            # Return plain text for backward compatibility
+            return combined_text
 
     def generate_summary(self, content, system_prompt, user_prompt, prompt_type="default", debug_api=False, incident_data=None):
-        """Generate summary using OpenAI or Azure OpenAI with molecular context enhancement, memory integration, and team analysis."""
+        """Generate summary using OpenAI or Azure OpenAI with memory integration and team analysis.
+
+        Args:
+            content: Can be a list of dicts (multimodal with 'type' and 'content'/'image_url')
+                    or a list of existing format dicts with 'type' and 'content' keys
+            system_prompt: System prompt for LLM
+            user_prompt: User prompt for LLM
+            prompt_type: Type of prompt being used
+            debug_api: Enable API debugging
+            incident_data: Incident data for memory/team analysis
+        """
         try:
-            # Format the content
-            with self.time_context("format_content", "ai", {"content_items": len(content)}):
-                formatted_content = []
-                for item in content:
-                    if item['type'] == 'text':
-                        formatted_content.append(item['content'])
-                    else:  # image
-                        formatted_content.append(f"[Image: {item['content']}]")
-                conversation = "\n".join(formatted_content)
-            
-            # Apply molecular context engineering for supported prompt types
-            molecular_examples_used = 0
-            if prompt_type.endswith('_molecular'):
-                with self.time_context("molecular_context_engineering", "molecular", {"prompt_type": prompt_type}):
-                    enhanced_user_prompt, molecular_examples_used = self.molecular_engine.construct_molecular_prompt(
-                        user_prompt, conversation, prompt_type
-                    )
-                logger.info(f"Applied molecular context engineering with {molecular_examples_used} examples for {prompt_type}")
-            else:
-                enhanced_user_prompt = user_prompt
+            # Check if content is multimodal (list of dicts with type/image_url keys)
+            is_multimodal = False
+            if isinstance(content, list) and len(content) > 0:
+                # Check if any item has 'image_url' key (indicates multimodal format)
+                is_multimodal = any('image_url' in item for item in content)
+
+            # Format the content based on whether it's multimodal or not
+            with self.time_context("format_content", "ai", {"content_items": len(content), "multimodal": is_multimodal}):
+                if is_multimodal:
+                    # Content is already in multimodal format - use as is
+                    multimodal_content = content
+                    logger.info(f"Using multimodal content with {len([c for c in content if 'image_url' in c])} images")
+                    # Build user message with multimodal content (prepend with prompt)
+                    user_content = [
+                        {"type": "text", "text": f"{user_prompt}\n\nContent:"}
+                    ] + content
+                else:
+                    # Legacy format - convert to string
+                    formatted_content = []
+                    for item in content:
+                        if item['type'] == 'text':
+                            formatted_content.append(item['content'])
+                        else:  # image (legacy format)
+                            formatted_content.append(f"[Image: {item['content']}]")
+                    conversation = "\n".join(formatted_content)
+                    user_content = f"{user_prompt}\n\nContent:\n{conversation}"
+
+            # Use the base user prompt without molecular context enhancement
+            enhanced_user_prompt = user_prompt
             
             # Enhance prompt with memory context if memory manager is available and incident data is provided
             memory_enhanced = False
             if self.memory_manager and incident_data:
                 try:
                     with self.time_memory_operation("memory_enhancement", "enhance_prompt"):
-                        # Pass information about whether molecular context was used
-                        molecular_context_used = molecular_examples_used > 0
                         original_prompt = enhanced_user_prompt
                         enhanced_user_prompt = self.memory_manager.enhance_prompt_with_memory(
-                            enhanced_user_prompt, incident_data, molecular_context_used
+                            enhanced_user_prompt, incident_data, False
                         )
                         
                         # Only claim enhancement if the prompt was actually changed
@@ -541,8 +507,9 @@ class IncidentProcessor:
                     logger.warning(f"Failed to enhance prompt with memory: {e}")
             
             # Perform team analysis if team knowledge system is available and incident data is provided
+            # Skip team analysis for prev_act prompt type
             team_analysis_result = None
-            if self.team_analyzer and incident_data:
+            if self.team_analyzer and incident_data and prompt_type != 'prev_act':
                 try:
                     with self.time_team_analysis("team_analysis", len(incident_data.get('conversation', [])), "incident_analysis"):
                         team_analysis_result = self.team_analyzer.analyze_incident_teams(incident_data)
@@ -563,6 +530,30 @@ class IncidentProcessor:
                             if learning_insights:
                                 logger.info(f"Generated {len(learning_insights)} learning insights from team analysis")
                                 print(f"🧠 Learned {len(learning_insights)} insights about team capabilities")
+                            
+                            # Auto-save team knowledge for workflows that require it (1-4 and 12)
+                            auto_save_workflows = [
+                                'customer_pending_facilitation',
+                                'dev_pending_facilitation',
+                                'escalation',
+                                'mitigation',
+                                'create_prompt_for_logs_analyze'
+                            ]
+                            if prompt_type in auto_save_workflows and self.team_knowledge_manager:
+                                try:
+                                    self.team_knowledge_manager.save_if_dirty()
+                                    logger.info(f"Auto-saved team knowledge for workflow: {prompt_type}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to auto-save team knowledge: {e}")
+
+                            # Mitigation-specific learning: Update SME database from team transfers
+                            if prompt_type == 'mitigation' and team_analysis_result:
+                                ownership_changes = team_analysis_result.get('ownership_changes', [])
+                                if ownership_changes:
+                                    try:
+                                        self._update_sme_database_from_mitigation(incident_data, team_analysis_result)
+                                    except Exception as e:
+                                        logger.warning(f"Failed to update SME database from mitigation: {e}")
                         except Exception as e:
                             logger.warning(f"Failed to learn from team analysis: {e}")
                     elif self.team_learning_engine and team_analysis_result and team_analysis_result.get('skipped_reason'):
@@ -571,11 +562,22 @@ class IncidentProcessor:
                 except Exception as e:
                     logger.warning(f"Failed to perform team analysis: {e}")
             
+            # Generate team recommendations based on incident and team knowledge
+            # Skip team recommendations for prev_act prompt type
+            team_recommendations = None
+            if self.team_knowledge_manager and incident_data and prompt_type != 'prev_act':
+                try:
+                    team_recommendations = self._generate_team_recommendations(incident_data, team_analysis_result, prompt_type)
+                    if team_recommendations:
+                        logger.info(f"Generated {len(team_recommendations)} team recommendations")
+                except Exception as e:
+                    logger.warning(f"Failed to generate team recommendations: {e}")
+            
             # Enhance prompt with team context if team analysis was performed
             team_enhanced = False
             if team_analysis_result and team_analysis_result.get('detected_teams'):
                 try:
-                    team_context = self._build_team_context(team_analysis_result)
+                    team_context = self._build_team_context(team_analysis_result, team_recommendations)
                     if team_context:
                         enhanced_user_prompt = f"{enhanced_user_prompt}\n\nTeam Context:\n{team_context}"
                         team_enhanced = True
@@ -583,19 +585,36 @@ class IncidentProcessor:
                         print(f"👥 Enhanced prompt with team context from {len(team_analysis_result['detected_teams'])} teams")
                 except Exception as e:
                     logger.warning(f"Failed to enhance prompt with team context: {e}")
-            # Prepare messages - ensure content is a string
-            with self.time_context("prepare_llm_messages", "ai", {"prompt_length": len(str(enhanced_user_prompt))}):
-                messages = [
-                    {"role": "system", "content": str(system_prompt)},
-                    {"role": "user", "content": f"{str(enhanced_user_prompt)}\n\nContent:\n{conversation}"}
-                ]
+
+            # Prepare messages - handle multimodal or text-only content
+            with self.time_context("prepare_llm_messages", "ai", {"multimodal": is_multimodal}):
+                if is_multimodal:
+                    # For multimodal, prepend enhanced user prompt to the content
+                    # Find the first text item and prepend the enhanced prompt
+                    messages = [
+                        {"role": "system", "content": str(system_prompt)},
+                        {"role": "user", "content": user_content}
+                    ]
+                else:
+                    messages = [
+                        {"role": "system", "content": str(system_prompt)},
+                        {"role": "user", "content": f"{str(enhanced_user_prompt)}\n\n{user_content}"}
+                    ]
+
             if debug_api:
                 print("\n[DEBUG_API] LLM API request body:")
+
             # Use Azure Router (GPT-5)
             model_name = self.deployment_name
-            # Count input tokens
-            with self.time_context("count_tokens", "ai", {"text_length": len(f"{system_prompt}\n{enhanced_user_prompt}\n{conversation}")}):
-                input_text = f"{system_prompt}\n{enhanced_user_prompt}\n{conversation}"
+
+            # Count input tokens (only count text for multimodal, approximate)
+            with self.time_context("count_tokens", "ai", {"multimodal": is_multimodal}):
+                if is_multimodal:
+                    # For multimodal, count only text portions (rough estimate)
+                    text_content = " ".join([item.get('text', '') for item in user_content if item.get('type') == 'text'])
+                    input_text = f"{system_prompt}\n{enhanced_user_prompt}\n{text_content}"
+                else:
+                    input_text = f"{system_prompt}\n{enhanced_user_prompt}\n{user_content}"
                 input_tokens = self.count_tokens(input_text)
             
             # Use Azure Router (GPT-5) for timing
@@ -603,13 +622,51 @@ class IncidentProcessor:
             
             # Generate summary with timing using Azure Router (GPT-5)
             print(f"🤖 Starting LLM call with {model_name}...")
-            with self.time_llm_call("llm_generate_summary", model_name, input_tokens, 0):  # We'll update output tokens after
-                response = self.client.chat.completions.create(
-                    model=self.deployment_name,
-                    messages=messages,
-                    temperature=0.7,
-                    max_tokens=8000
-                )
+            
+            # Retry logic for timeout and connection errors
+            max_retries = 3
+            retry_delay = 5  # Start with 5 seconds
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    with self.time_llm_call("llm_generate_summary", model_name, input_tokens, 0):  # We'll update output tokens after
+                        response = self.client.chat.completions.create(
+                            model=self.deployment_name,
+                            messages=messages,
+                            temperature=0.7,
+                            max_tokens=8000,
+                            timeout=self.llm_timeout
+                        )
+                    # Success - break out of retry loop
+                    break
+                except (TimeoutError, ConnectionError, Exception) as e:
+                    last_error = e
+                    error_str = str(e).lower()
+                    
+                    # Check if it's a retryable error (timeout, connection, rate limit)
+                    is_retryable = any(indicator in error_str for indicator in [
+                        'timeout', 'connection', '429', 'rate limit', 'throttled', 
+                        'unavailable', 'socket', 'did not properly respond'
+                    ]) or isinstance(e, (TimeoutError, ConnectionError))
+                    
+                    if not is_retryable or attempt == max_retries - 1:
+                        # Non-retryable error or last attempt - raise immediately
+                        print(f"❌ LLM call failed: {str(e)[:200]}")
+                        raise
+                    
+                    # Retryable error - wait and retry
+                    print(f"⚠️  LLM call failed (attempt {attempt + 1}/{max_retries}): {str(e)[:150]}... Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff (5s, 10s, 20s)
+                else:
+                    # This shouldn't happen, but just in case
+                    break
+            
+            # If we get here without a response, raise the last error
+            if 'response' not in locals():
+                print(f"❌ LLM call failed after {max_retries} attempts")
+                raise last_error if last_error else Exception("LLM call failed for unknown reason")
             # Get output tokens and calculate cost
             with self.time_context("process_llm_response", "ai", {"response_length": len(response.choices[0].message.content)}):
                 output_tokens = response.usage.completion_tokens
@@ -624,12 +681,6 @@ class IncidentProcessor:
                     "cost": cost
                 }
             }
-            # Add molecular context info if used
-            if molecular_examples_used > 0:
-                result["molecular_context"] = {
-                    "examples_used": molecular_examples_used,
-                    "prompt_type": prompt_type
-                }
             # Add memory context info if used
             if memory_enhanced:
                 result["memory_context"] = {
@@ -644,6 +695,14 @@ class IncidentProcessor:
                     "teams_detected": len(team_analysis_result.get('detected_teams', [])),
                     "team_analysis": self._serialize_team_analysis(team_analysis_result)
                 }
+            
+            # Add team recommendations if available
+            if team_recommendations:
+                result["team_recommendations"] = team_recommendations
+            
+            # Add transfer reasons if available
+            if team_analysis_result and team_analysis_result.get('transfer_reasons'):
+                result["transfer_reasons"] = team_analysis_result['transfer_reasons']
             
             return result
         except Exception as e:
@@ -704,7 +763,187 @@ class IncidentProcessor:
             logger.warning(f"Error serializing team analysis: {e}")
             return {"error": "Failed to serialize team analysis"}
     
-    def _build_team_context(self, team_analysis_result: Dict[str, Any]) -> str:
+    def _generate_team_recommendations(self, incident_data: Dict[str, Any],
+                                       team_analysis_result: Dict[str, Any] = None,
+                                       prompt_type: str = None) -> List[Dict[str, Any]]:
+        """
+        Generate team recommendations with prompt-specific pre-selection strategies.
+
+        Strategies per prompt:
+        - customer_pending_facilitation: Focus on CxE Care, CSS teams
+        - dev_pending_facilitation: Focus on SWE, Engineering teams
+        - escalation: Use transfer reason analysis
+        - article_search: Domain keyword matching
+        - simplified_incident_explanation: Expertise-based matching
+        - mitigation: Transfer reason analysis (when incident is mitigated)
+
+        Args:
+            incident_data: Incident data containing conversation and summary
+            team_analysis_result: Optional team analysis results
+            prompt_type: Type of prompt being used for filtering strategy
+
+        Returns:
+            List of team recommendations with evidence
+        """
+        try:
+            recommendations = []
+
+            # Get incident summary and conversation for analysis
+            summary = incident_data.get('summary', '')
+            conversation = incident_data.get('conversation', [])
+            conversation_text = ' '.join([entry.get('text', '') for entry in conversation[:10]])
+
+            # Combine text for analysis
+            incident_text = f"{summary}\n{conversation_text}".lower()
+
+            # Get all teams from knowledge database
+            all_teams = self.team_knowledge_manager.get_all_teams()
+
+            # Define prompt-specific strategies
+            strategies = {
+                'customer_pending_facilitation': {
+                    'focus_keywords': ['care', 'css', 'customer', 'support'],
+                    'exclude_keywords': ['swe', 'engineering', 'developer', 'backend'],
+                    'boost_keywords': ['cxe', 'customer support']
+                },
+                'dev_pending_facilitation': {
+                    'focus_keywords': ['swe', 'engineering', 'developer', 'linux', 'macos', 'windows'],
+                    'exclude_keywords': ['care', 'css'],
+                    'boost_keywords': ['swe_linux', 'swe_macos', 'backend']
+                },
+                'escalation': {
+                    'focus_keywords': [],  # No filtering for escalation
+                    'exclude_keywords': [],
+                    'boost_keywords': []
+                },
+                'article_search': {
+                    'focus_keywords': [],  # Domain-based matching
+                    'exclude_keywords': [],
+                    'boost_keywords': []
+                },
+                'simplified_incident_explanation': {
+                    'focus_keywords': [],
+                    'exclude_keywords': [],
+                    'boost_keywords': []
+                },
+                'mitigation': {
+                    'focus_keywords': [],  # All teams considered
+                    'exclude_keywords': [],
+                    'boost_keywords': []
+                }
+            }
+
+            # Get strategy for this prompt type
+            strategy = strategies.get(prompt_type, strategies['escalation'])
+
+            # First pass: Score all teams
+            scored_teams = []
+            for team_id, team_data in all_teams.items():
+                team_name = team_data.get('name', team_id)
+                team_name_lower = team_name.lower()
+
+                # Apply exclusion filter
+                if any(exclude in team_name_lower for exclude in strategy['exclude_keywords']):
+                    continue
+
+                score = 0.0
+                evidence_items = []
+
+                # Apply focus keyword boost
+                if strategy['focus_keywords']:
+                    for focus_kw in strategy['focus_keywords']:
+                        if focus_kw in team_name_lower:
+                            score += 0.5  # Boost for matching focus keywords
+                            evidence_items.append(f"Matches focus area: {focus_kw}")
+
+                # Apply boost keywords
+                for boost_kw in strategy['boost_keywords']:
+                    if boost_kw in team_name_lower:
+                        score += 0.3
+                        evidence_items.append(f"Recommended for: {boost_kw}")
+
+                # Check transfer reasons (strict matching to avoid false positives from other incidents)
+                transfer_reasons = team_data.get('transfer_reasons', [])
+                for reason_data in transfer_reasons:
+                    if not reason_data.get('confirmed', False):
+                        continue
+
+                    reason_text = reason_data.get('transfer_reason', '').lower()
+                    if reason_text:
+                        # Extract meaningful keywords (exclude common stop words)
+                        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'been', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'what', 'which', 'who', 'whom', 'whose', 'where', 'when', 'why', 'how', 'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just', 'also'}
+                        
+                        # Extract technical terms (contain dots, hyphens, underscores, or are long identifiers)
+                        # These are highly specific and MUST appear in incident for match
+                        technical_terms = [kw.strip('.,!?;:()[]{}"\'') for kw in reason_text.split() if '.' in kw or '-' in kw or '_' in kw or len(kw.strip('.,!?;:()[]{}"\'')) > 12]
+                        
+                        # Extract meaningful keywords (longer than 4 chars, not stop words, exclude generic terms)
+                        generic_terms = {'microsoft', 'incident', 'issue', 'problem', 'device', 'system', 'setting', 'settings', 'configuration', 'config', 'macos', 'windows', 'linux', 'preference', 'preferences', 'management', 'manager', 'service', 'services', 'application', 'applications', 'client', 'clients'}
+                        keywords = [kw.strip('.,!?;:()[]{}"\'') for kw in reason_text.split() 
+                                   if len(kw.strip('.,!?;:()[]{}"\'')) > 4 
+                                   and kw.strip('.,!?;:()[]{}"\'') not in stop_words
+                                   and kw.strip('.,!?;:()[]{}"\'') not in generic_terms]
+                        
+                        # CRITICAL: If transfer reason contains technical terms, ALL must be present in incident
+                        if technical_terms:
+                            all_technical_match = all(term.lower() in incident_text for term in technical_terms)
+                            if not all_technical_match:
+                                continue  # Skip if any technical term is missing - likely wrong match
+                        
+                        # Require at least 3 meaningful keyword matches (increased threshold)
+                        if keywords:
+                            matches = sum(1 for keyword in keywords[:15] if keyword.lower() in incident_text)
+                            if matches >= 3:
+                                score += 0.4
+                                evidence_items.append(f"Transfer reason: {reason_data.get('transfer_reason', '')}")
+                        elif technical_terms:
+                            # If only technical terms exist and all matched, allow it
+                            score += 0.4
+                            evidence_items.append(f"Transfer reason: {reason_data.get('transfer_reason', '')}")
+
+                # Check expertise areas
+                expertise = team_data.get('expertise', [])
+                for exp in expertise:
+                    if exp.lower() in incident_text:
+                        score += 0.25
+                        evidence_items.append(f"Expertise area: {exp}")
+
+                # Check responsibilities
+                responsibilities = team_data.get('responsibilities', [])
+                for resp in responsibilities:
+                    if resp.lower() in incident_text:
+                        score += 0.2
+                        evidence_items.append(f"Responsibility: {resp}")
+
+                # Check common issues
+                common_issues = team_data.get('common_issues', [])
+                for issue in common_issues:
+                    if issue.lower() in incident_text:
+                        score += 0.25
+                        evidence_items.append(f"Common issue: {issue}")
+
+                # Only add if score is above threshold
+                if score >= 0.3 and evidence_items:
+                    scored_teams.append({
+                        'team_name': team_name,
+                        'score': score,
+                        'evidence': evidence_items[:5],
+                        'confidence': min(1.0, score)
+                    })
+
+            # Sort by score (highest first)
+            scored_teams.sort(key=lambda x: x['score'], reverse=True)
+
+            # Return top 3-5 recommendations based on prompt type
+            limit = 5 if prompt_type == 'article_search' else 3
+            return scored_teams[:limit]
+
+        except Exception as e:
+            logger.error(f"Error generating team recommendations: {e}")
+            return []
+    
+    def _build_team_context(self, team_analysis_result: Dict[str, Any], 
+                            team_recommendations: List[Dict[str, Any]] = None) -> str:
         """Build team context string from team analysis results."""
         try:
             detected_teams = team_analysis_result.get('detected_teams', [])
@@ -796,11 +1035,177 @@ class IncidentProcessor:
                     
                     context_parts.append(team_info)
             
-            return "\n".join(context_parts)
+            # Add team recommendations if available
+            if team_recommendations:
+                context_parts.append("\nTeam Recommendations:")
+                for i, rec in enumerate(team_recommendations, 1):
+                    team_name = rec.get('team_name', 'Unknown')
+                    evidence = rec.get('evidence', [])
+                    confidence = rec.get('confidence', 0.0)
+                    
+                    rec_text = f"{i}. {team_name} (confidence: {confidence:.2f})"
+                    if evidence:
+                        rec_text += f"\n   Evidence: {'; '.join(evidence[:3])}"
+                    context_parts.append(rec_text)
             
+            # Add transfer reasons if available
+            transfer_reasons = team_analysis_result.get('transfer_reasons', [])
+            if transfer_reasons:
+                context_parts.append("\nTransfer Reasons (from this incident):")
+                for reason in transfer_reasons[:3]:  # Top 3
+                    team_name = reason.get('team_name', 'Unknown')
+                    reason_text = reason.get('transfer_reason', '')
+                    evidence = reason.get('evidence', [])
+                    
+                    reason_line = f"- {team_name}: {reason_text}"
+                    if evidence:
+                        reason_line += f" (Evidence: {evidence[0][:100]}...)" if len(evidence[0]) > 100 else f" (Evidence: {evidence[0]})"
+                    context_parts.append(reason_line)
+            
+            return "\n".join(context_parts)
+
         except Exception as e:
             logger.error(f"Error building team context: {e}")
             return ""
+
+    def _update_sme_database_from_mitigation(self, incident_data: Dict[str, Any],
+                                             team_analysis_result: Dict[str, Any]) -> None:
+        """
+        Update SME database with insights from team transfers during mitigation.
+
+        When an incident is mitigated and team transfers occurred, this method
+        analyzes the transfer context and updates the team knowledge database with
+        insights about team responsibilities and expertise.
+
+        Args:
+            incident_data: The incident data
+            team_analysis_result: The team analysis results including ownership changes
+        """
+        try:
+            ownership_changes = team_analysis_result.get('ownership_changes', [])
+            if not ownership_changes:
+                return
+
+            incident_id = incident_data.get('incident_id', 'unknown')
+            conversation = incident_data.get('conversation', [])
+            summary = incident_data.get('summary', '')
+
+            # Build context from conversation
+            conversation_text = ' '.join([entry.get('text', '') for entry in conversation[:20]])
+            incident_context = f"{summary}\n{conversation_text}".lower()
+
+            # Process each ownership change
+            for change in ownership_changes:
+                to_team = change.get('to_team', '')
+                from_team = change.get('from_team', '')
+                change_type = change.get('change_type', '')
+                context = change.get('context', '')
+                confidence = change.get('confidence', 0.0)
+
+                # Only process transfers with high confidence
+                if confidence < 0.7 or change_type not in ['transfer', 'escalation']:
+                    continue
+
+                # Use LLM to analyze what the team is responsible for
+                team_insights = self._extract_team_responsibility_from_transfer(
+                    to_team, context, incident_context
+                )
+
+                # Update team knowledge database with transfer reason
+                if team_insights and self.team_knowledge_manager:
+                    transfer_reason = {
+                        'transfer_reason': team_insights.get('responsibility', ''),
+                        'evidence': [
+                            f"Incident {incident_id}",
+                            f"Transfer from {from_team} to {to_team}",
+                            context[:200] if context else ''
+                        ],
+                        'confidence': confidence,
+                        'incident_id': incident_id,
+                        'technical_domains': team_insights.get('technical_domains', []),
+                        'issue_patterns': team_insights.get('issue_patterns', [])
+                    }
+
+                    self.team_knowledge_manager.add_transfer_reason(to_team, transfer_reason)
+                    logger.info(f"Updated team knowledge for {to_team} from mitigation of incident {incident_id}")
+                    print(f"📝 Updated team knowledge for {to_team} from mitigation")
+
+        except Exception as e:
+            logger.error(f"Error updating SME database from mitigation: {e}")
+            raise
+
+    def _extract_team_responsibility_from_transfer(self, team_name: str, transfer_context: str,
+                                                   incident_context: str) -> Dict[str, Any]:
+        """
+        Use LLM to analyze what a team is responsible for based on transfer context.
+
+        Args:
+            team_name: The name of the team that received the transfer
+            transfer_context: The context of the transfer from the conversation
+            incident_context: The full incident context
+
+        Returns:
+            Dict with responsibility, technical_domains, and issue_patterns
+        """
+        try:
+            prompt = f"""Analyze this team transfer and extract what the receiving team is responsible for.
+
+Team that received the transfer: {team_name}
+
+Transfer context:
+{transfer_context}
+
+Incident context (truncated):
+{incident_context[:1000]}
+
+Extract:
+1. What technical domain or area the team is responsible for (one sentence)
+2. Technical domains involved (list of 3-5 keywords)
+3. Common issue patterns (list of 2-3 patterns)
+
+Respond in JSON format:
+{{
+    "responsibility": "What the team is responsible for",
+    "technical_domains": ["domain1", "domain2", ...],
+    "issue_patterns": ["pattern1", "pattern2", ...]
+}}"""
+
+            response = self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[
+                    {"role": "system", "content": "You are an expert at analyzing team responsibilities from incident conversations. Extract structured information in JSON format."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=500
+            )
+
+            result_text = response.choices[0].message.content
+
+            # Parse JSON response
+            import json
+            # Clean up response text - remove markdown code blocks if present
+            if '```json' in result_text:
+                result_text = result_text.split('```json')[1].split('```')[0].strip()
+            elif '```' in result_text:
+                result_text = result_text.split('```')[1].split('```')[0].strip()
+
+            result = json.loads(result_text)
+
+            return {
+                'responsibility': result.get('responsibility', ''),
+                'technical_domains': result.get('technical_domains', []),
+                'issue_patterns': result.get('issue_patterns', [])
+            }
+
+        except Exception as e:
+            logger.warning(f"Failed to extract team responsibility with LLM: {e}")
+            # Return basic info from transfer context
+            return {
+                'responsibility': transfer_context[:200] if transfer_context else '',
+                'technical_domains': [],
+                'issue_patterns': []
+            }
     
     def store_incident_memory(self, incident_number: str, incident_data: Dict[str, Any], 
                              processing_result: Dict[str, Any]) -> None:
@@ -1948,21 +2353,24 @@ CRITICAL INSTRUCTIONS:
                     "operation_time": operation_time or datetime.now().isoformat(),
                     "model_used": model_name
                 }
+                
+                # Add team recommendations and transfer reasons if available
+                if ai_summary and 'team_recommendations' in ai_summary:
+                    summary_data['team_recommendations'] = ai_summary['team_recommendations']
+                if ai_summary and 'transfer_reasons' in ai_summary:
+                    summary_data['transfer_reasons'] = ai_summary['transfer_reasons']
+                
                 with open(summary_file, 'w', encoding='utf-8') as f:
                     json.dump(summary_data, f, indent=2, ensure_ascii=False)
                 logger.info(f"Saved processed content to {summary_file}")
                 print(f"✅ Created: {summary_file}")
 
-            # Print the summary to the console (skip for prev_act_molecular to avoid duplication)
-            if ai_summary and 'summary' in ai_summary and prompt_type != 'prev_act_molecular':
+            # Print the summary to the console (skip for prev_act to avoid duplication)
+            if ai_summary and 'summary' in ai_summary and prompt_type != 'prev_act':
                 print("\nAI Generated Summary:")
                 print("="*80)
                 print(ai_summary['summary'])
                 print("="*80)
-                
-                # Print molecular context info if available
-                if 'molecular_context' in ai_summary:
-                    print(f"Molecular Context: {ai_summary['molecular_context']['examples_used']} examples used for {ai_summary['molecular_context']['prompt_type']}")
                 
                 # Also log to file for record keeping
                 logger.info("AI Summary generated and displayed in terminal")
@@ -2009,11 +2417,11 @@ def main():
     parser = argparse.ArgumentParser(description='Process and summarize incident data from a processed JSON file.')
     parser.add_argument('input_file', help='Path to the processed JSON file (must contain conversation and summary)')
     # Always use Azure Router (GPT-5) - no model selection needed
-    parser.add_argument('--prompt-type', default='default', help='Type of prompt to use (default, technical, executive, escalation, escalation_molecular, mitigation_molecular, troubleshooting_molecular, article_search_molecular, etc.)')
+    parser.add_argument('--prompt-type', default='default', help='Type of prompt to use (customer_pending_facilitation, dev_pending_facilitation, escalation, mitigation, prev_act, article_search, create_prompt_for_logs_analyze, simplified_incident_explanation)')
     parser.add_argument('--debug', '-d', action='store_true', help='Print the body of the API request sent to the LLM for debugging.')
     parser.add_argument('--multi-incident', action='store_true', help='Process multiple incidents from a combined JSON file')
     parser.add_argument('--no-memory', action='store_true', help='Disable memory integration for this processing session')
-    parser.add_argument('--no-team-analysis', action='store_true', help='Disable team analysis for this processing session')
+    parser.add_argument('--teams', '-t', action='store_true', help='Enable team knowledge and team matching for this processing session')
     parser.add_argument('--articles-embeddings', help='Path to article embeddings file (for article search mode)')
     parser.add_argument('--vector-db-path', help='Path to vector database file (for article search mode)')
     args = parser.parse_args()
@@ -2037,7 +2445,7 @@ def main():
 
         # Initialize processor with memory support, team analysis, and article search if needed
         enable_memory = not args.no_memory
-        enable_team_analysis = not args.no_team_analysis
+        enable_team_analysis = args.teams
         processor = IncidentProcessor(
             enable_memory=enable_memory,
             enable_team_analysis=enable_team_analysis,
@@ -2066,10 +2474,11 @@ def main():
             data = json.load(f)
         conversation = data.get('conversation', [])
         summary = data.get('summary', None)
+
         formatted_content = processor.format_conversation_with_ai_summary(conversation, summary=summary)
-        
+
         # Handle article search mode
-        if args.prompt_type == 'article_search_molecular':
+        if args.prompt_type == 'article_search':
             print("🔍 DEBUG: Entering article search mode block")
             if not processor.article_searcher:
                 logger.error("Article search mode requires --articles-embeddings or --vector-db-path")
@@ -2119,7 +2528,7 @@ def main():
             with open('prompts.json', 'r') as f:
                 all_prompts = json.load(f)
             
-            escalation_prompts = all_prompts.get('escalation_molecular', {})
+            escalation_prompts = all_prompts.get('escalation', {})
             print(f"DEBUG: escalation_prompts found: {bool(escalation_prompts)}")
             if escalation_prompts:
                 try:
@@ -2132,7 +2541,7 @@ def main():
                         }],
                         escalation_prompts['system_prompt'],
                         escalation_prompts['user_prompt'],
-                        prompt_type='escalation_molecular',
+                        prompt_type='escalation',
                         debug_api=args.debug,
                         incident_data=data
                     )
@@ -2192,7 +2601,7 @@ def main():
             
             return
         
-        # Generate summary with molecular context enhancement and memory integration
+        # Generate summary with memory integration
         summary_result = processor.generate_summary(
             [{
                 'type': 'text',
@@ -2221,129 +2630,8 @@ def main():
         
         # Memory is already stored in the process_incident method above
         # No need to store it again here
-        
+
         logger.info(f"Completed processing {args.input_file}")
-
-        # Interactive prompt to add example to molecular_examples.json
-        try:
-            # Check if stdin is available (not redirected)
-            import sys
-            if sys.stdin.isatty():
-                add_example = input("Do you want to add this example to molecular_examples.json? (Y/N): ").strip().lower()
-            else:
-                print("Skipping interactive example addition (stdin not available)")
-                add_example = 'n'
-            if add_example == 'y':
-                # Automatically use the current prompt type as the section if it's a molecular type
-                if args.prompt_type.endswith('_molecular'):
-                    section = args.prompt_type
-                    print(f"Adding example to section: {section}")
-                else:
-                    # Fallback to manual selection for non-molecular prompt types
-                    if sys.stdin.isatty():
-                        section = input("Which section? (escalation_molecular / mitigation_molecular / troubleshooting_molecular / article_molecular / wait_time_molecular / prev_act_molecular): ").strip()
-                    else:
-                        print("Cannot select section interactively (stdin not available)")
-                        section = "escalation_molecular"  # Default fallback
-
-                # Generate suggested keywords using AI
-                try:
-                    keyword_prompts = get_keyword_suggestion_prompt()
-                    keyword_messages = [
-                        {"role": "system", "content": keyword_prompts["system_prompt"]},
-                        {"role": "user", "content": keyword_prompts["user_prompt"].replace("{incident_text}", formatted_content)}
-                    ]
-                    # Use Azure Router (GPT-5) for keyword generation
-                    keyword_response = processor.client.chat.completions.create(
-                        model=processor.deployment_name,
-                        messages=keyword_messages,
-                        temperature=0.3,
-                        max_tokens=100
-                    )
-                    suggested_keywords = keyword_response.choices[0].message.content.strip()
-                except Exception as e:
-                    print(f"Could not generate suggested keywords: {e}")
-                    suggested_keywords = ""
-                # Show existing categories for the selected section
-                try:
-                    with open("molecular_examples.json", "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        existing_categories = set()
-                        if section in data:
-                            existing_categories = set(
-                                ex.get("category", "") for ex in data[section] if ex.get("category", "")
-                            )
-                        if existing_categories:
-                            print(f"Existing categories in '{section}': {sorted(existing_categories)}")
-                        else:
-                            print(f"No categories found in '{section}'.")
-                except Exception as e:
-                    print(f"Could not load existing categories: {e}")
-                if sys.stdin.isatty():
-                    keywords = input(f"Enter keywords (suggested: {suggested_keywords}): ").strip().split(",")
-                else:
-                    print(f"Using suggested keywords: {suggested_keywords}")
-                    keywords = suggested_keywords.split(",") if suggested_keywords else []
-                keywords = [k.strip() for k in keywords if k.strip()]
-
-                # Get categories only from the selected section and show as suggestions
-                try:
-                    with open("molecular_examples.json", "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        section_categories = set()
-                        if section in data:
-                            section_categories = set(
-                                ex.get("category", "") for ex in data[section] if ex.get("category", "")
-                            )
-                        if section_categories:
-                            category_suggestions = " / ".join(sorted(section_categories))
-                        else:
-                            category_suggestions = "No categories found in this section"
-                except Exception as e:
-                    category_suggestions = "Could not load categories"
-                    
-                if sys.stdin.isatty():
-                    category = input(f"Enter category ({category_suggestions}): ").strip()
-                else:
-                    print(f"Using default category: general")
-                    category = "general"
-                # Filter noisy lines from input
-                noise_phrases = [
-                    "Transferred from",
-                    "Support ICM enrichment CEM MDE",
-                    "Acknowledging incident",
-                    "[IMAGE DATA SHRUNK - TODO: handle image data]",
-                    "Created by Azure Support Center"
-                ]
-                filtered_lines = []
-                for line in formatted_content.splitlines():
-                    if not any(phrase in line for phrase in noise_phrases):
-                        # Remove leading '[timestamp] author:' if present
-                        cleaned_line = re.sub(r"^\[.*?\]\s*[^:]+:\s*", "", line)
-                        if cleaned_line.strip():
-                            filtered_lines.append(cleaned_line.strip())
-                filtered_input = "\n".join(filtered_lines).strip()
-                # Prepare new example (no severity)
-                new_example = {
-                    "keywords": keywords,
-                    "category": category,
-                    "example": {
-                        "input": filtered_input,
-                        "output": summary_result["summary"] if isinstance(summary_result, dict) and "summary" in summary_result else str(summary_result)
-                    }
-                }
-                # Load, append, and save
-                with open("molecular_examples.json", "r+", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if section not in data:
-                        data[section] = []
-                    data[section].append(new_example)
-                    f.seek(0)
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-                    f.truncate()
-                print(f"Example added to {section} in molecular_examples.json.")
-        except Exception as e:
-            logger.error(f"Error during interactive example addition: {str(e)}")
         return
     except Exception as e:
         logger.error(f"Error in main: {str(e)}")

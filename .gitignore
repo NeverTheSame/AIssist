@@ -13,7 +13,6 @@
 .vscode/
 logs/
 query.kql
-molecular_examples.json
 prompts.json
 technical_patterns.json
 test-*.py
@@ -27,3 +26,23 @@ AGENTS.md
 Documentation/
 MCP-Proxy/
 vip_incidents/
+
+# Exclude all .md files except README.md
+**/*.md
+!README.md
+
+# Additional exclusions requested
+perf_profiles/
+preventative_actions/
+run_kusto.py
+kusto_fetcher_api.py
+.github/
+~$*.docx
+.sisyphus/
+kql/
+xplat-training/
+.claude/
+mbr/
+follow_up_patterns.txt
+interactive_menu_prompts.json
+manual.docx
