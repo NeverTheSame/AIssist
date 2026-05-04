@@ -4,6 +4,8 @@ import subprocess
 import os
 import json
 import uuid
+import threading
+import time
 from azure.kusto.data.exceptions import KustoNetworkError
 from datetime import datetime
 import traceback
@@ -97,18 +99,23 @@ def show_prompt_menu():
         except json.JSONDecodeError:
             prompt_emojis = {}
 
-        # Filter to only show prompts that have emojis
+        # Filter to only show prompts that have emojis and exist in prompts.json
         prompt_types_with_emojis = [pt for pt in prompt_types if pt in prompt_emojis]
         
         if not prompt_types_with_emojis:
             print("No prompt types with emojis found in prompts.json")
             sys.exit(1)
         
+        # Append free-text as last option (not in prompts.json; prompts generated from user input)
+        menu_options = prompt_types_with_emojis + ["free_text"]
+        free_text_label = "free text (describe what you need)"
+
         print("\nAvailable prompt types:")
         print("=" * 40)
-        for i, prompt_type in enumerate(prompt_types_with_emojis, 1):
-            emoji = prompt_emojis[prompt_type]
-            print(f"{i:2d}. {emoji} {prompt_type}")
+        for i, prompt_type in enumerate(menu_options, 1):
+            emoji = prompt_emojis.get(prompt_type, "")
+            label = free_text_label if prompt_type == "free_text" else prompt_type
+            print(f"{i:2d}. {emoji} {label}")
         print("=" * 40)
         
         while True:
@@ -116,8 +123,8 @@ def show_prompt_menu():
                 choice = input("Select a prompt type (enter number): ").strip()
                 choice_num = int(choice)
                 
-                if 1 <= choice_num <= len(prompt_types_with_emojis):
-                    selected_prompt = prompt_types_with_emojis[choice_num - 1]
+                if 1 <= choice_num <= len(menu_options):
+                    selected_prompt = menu_options[choice_num - 1]
                     print(f"Selected: {selected_prompt}")
                     
                     # Automatically set vector database path for article search mode
@@ -133,7 +140,7 @@ def show_prompt_menu():
                     
                     return selected_prompt, None
                 else:
-                    print(f"Invalid choice. Please enter a number between 1 and {len(prompt_types_with_emojis)}")
+                    print(f"Invalid choice. Please enter a number between 1 and {len(menu_options)}")
             except ValueError:
                 print("Invalid input. Please enter a number.")
             except KeyboardInterrupt:
@@ -143,6 +150,63 @@ def show_prompt_menu():
     except Exception as e:
         print(f"Error reading prompts.json: {e}")
         sys.exit(1)
+
+
+def read_free_text_input():
+    """Read multiline prompt from stdin. User submits by pressing Enter on an empty line. Returns non-empty string."""
+    print("Enter your prompt (multiple lines OK). Press Enter on an empty line to submit.")
+    lines = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if line.strip() == "":
+            break
+        lines.append(line)
+    text = "\n".join(lines).strip()
+    if not text:
+        text = "Summarize this incident clearly."
+        print(f"Using default: {text}")
+    return text
+
+
+def get_free_text_prompts(user_description=None):
+    """Generate full system_prompt + user_prompt from user description (or from multiline stdin if user_description is None). Returns dict with system_prompt, user_prompt."""
+    from free_text_prompt_generator import generate_prompts_from_free_text
+    if user_description is None:
+        user_description = read_free_text_input()
+    print("Generating custom prompt from your description...")
+    prompts = generate_prompts_from_free_text(user_description)
+    print("\n" + "=" * 60)
+    print("GENERATED PROMPT (will be used for incident analysis)")
+    print("=" * 60)
+    print("\n--- system_prompt ---")
+    print(prompts.get("system_prompt", ""))
+    print("\n--- user_prompt ---")
+    print(prompts.get("user_prompt", ""))
+    print("=" * 60 + "\n")
+    return prompts
+
+
+def _fetch_and_transform_incidents(incident_numbers: List[str]) -> List[str]:
+    """Fetch incident data from the configured database and process CSV to JSON. Returns successful incident IDs."""
+    successful = []
+    for incident_number in incident_numbers:
+        if fetch_incident_data(incident_number):
+            successful.append(incident_number)
+        else:
+            logger.warning(f"Skipping incident {incident_number} due to fetch failure")
+            print(f"Skipping incident {incident_number} due to fetch failure")
+    for incident_number in list(successful):
+        try:
+            process_incident_to_json(incident_number)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error processing incident {incident_number} to JSON: {e}")
+            print(f"Error processing incident {incident_number} to JSON: {e}")
+            successful.remove(incident_number)
+    return successful
+
 
 @time_operation("fetch_incident_data", "fetch")
 def fetch_incident_data(incident_number):
@@ -305,6 +369,163 @@ def process_incident_to_json(incident_number):
         logger.error(f"STDERR: {e.stderr}")
         raise
 
+def _parse_manual_txt(txt_path: str) -> Tuple[str, List[Dict]]:
+    """Parse a manual text file (format from write_manual_txt.py) into summary and discussion_items.
+    Returns (summary_text, discussion_items) where discussion_items have 'Text', 'author', 'Date' keys."""
+    with open(txt_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    if not content.strip():
+        return "", []
+
+    summary_parts = []
+    discussion_section_lines = []  # raw lines of Discussion section
+    state = None
+    lines = content.splitlines()
+    sep_equals = "=" * 60
+    sep_dashes = "-" * 40
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped == sep_equals or (stripped.startswith("=") and len(stripped) >= 40 and set(stripped.replace("=", "")) == {""}):
+            i += 1
+            section_name = ""
+            while i < len(lines):
+                section_name = lines[i].strip()
+                i += 1
+                if section_name:
+                    break
+            if i < len(lines) and lines[i].strip().startswith("="):
+                i += 1
+            if "authored summary" in section_name.lower():
+                state = "summary"
+            elif "discussion" in section_name.lower():
+                state = "discussion"
+            elif "incident images" in section_name.lower():
+                state = "images"
+            else:
+                state = None
+            continue
+
+        if state == "summary":
+            if stripped == sep_equals or (stripped.startswith("=") and len(stripped) >= 40):
+                state = None
+                i += 1
+                continue
+            if stripped == "(No summary content)":
+                i += 1
+                continue
+            summary_parts.append(line)
+        elif state == "discussion":
+            if stripped == sep_equals or (stripped.startswith("=") and len(stripped) >= 40):
+                state = None
+                i += 1
+                continue
+            if stripped == "(No discussion entries after filter)":
+                i += 1
+                continue
+            if stripped == sep_dashes:
+                discussion_section_lines.append(stripped)
+                i += 1
+                continue
+            discussion_section_lines.append(line)
+        elif state == "images":
+            if stripped.startswith("=") and len(stripped) >= 40:
+                state = None
+            i += 1
+            continue
+        i += 1
+
+    # Parse discussion section: blocks split by line of 40 dashes; each block first line = "Author - Date", rest = body
+    discussion_items = []
+    discussion_text = "\n".join(discussion_section_lines)
+    for block in discussion_text.split("\n" + sep_dashes + "\n"):
+        block = block.strip()
+        if not block or block == "(No discussion entries after filter)":
+            continue
+        first_newline = block.find("\n")
+        if first_newline >= 0:
+            author_date = block[:first_newline].strip()
+            body = block[first_newline + 1 :].strip()
+        else:
+            author_date = block
+            body = ""
+        author, date = author_date, ""
+        if " - " in author_date:
+            parts = author_date.split(" - ", 1)
+            author = parts[0].strip()
+            date = parts[1].strip() if len(parts) > 1 else ""
+        discussion_items.append({"author": author, "Date": date, "Text": body})
+
+    summary_text = "\n".join(summary_parts).strip()
+    return summary_text, discussion_items
+
+
+def process_manual_txt_only(incident_number, manual_txt_path=None):
+    """Create a processed incident JSON using a manual text file instead of fetching database data."""
+    logger.info(f"Starting manual text processing for incident {incident_number}")
+    start_time = time.monotonic()
+    print(f"Processing manual text for incident {incident_number}...")
+
+    try:
+        from config import config
+        from transformer import dump_discussion_items_to_json
+    except Exception as import_error:
+        logger.error(f"Failed to import helpers: {import_error}")
+        raise
+
+    txt_path = manual_txt_path or os.path.join(str(config.root_dir), "manual.txt")
+    manual_name = os.path.basename(txt_path)
+    if not os.path.exists(txt_path):
+        error_msg = f"{manual_name} not found at {txt_path}. Provide the file and retry."
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    with open(txt_path, "r", encoding="utf-8") as _f:
+        raw_manual = _f.read()
+    if not raw_manual.strip():
+        error_msg = f"{manual_name} is empty. Add incident content and retry."
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    try:
+        summary_text, discussion_items = _parse_manual_txt(txt_path)
+    except Exception as parse_error:
+        logger.error(f"Failed to parse {manual_name}: {parse_error}")
+        raise
+
+    if not summary_text and not discussion_items:
+        # File has content but not the expected section layout, so process the full body as summary.
+        warn_msg = (
+            f"{manual_name} has no Authored summary / Discussion sections; using entire file as summary. "
+            "For structured discussion entries, use the manual exporter section layout."
+        )
+        logger.warning(warn_msg)
+        print(f"⚠️  WARNING: {warn_msg}")
+        summary_text = raw_manual.strip()
+        discussion_items = []
+
+    logger.info(f"Parsed {manual_name}: summary {len(summary_text)} chars, {len(discussion_items)} discussion entries")
+    print(f"📄 Read summary ({len(summary_text)} chars) and {len(discussion_items)} discussion entries from {manual_name}")
+
+    try:
+        output_file, _ = dump_discussion_items_to_json(
+            discussion_items,
+            str(incident_number),
+            summary_content=summary_text or None,
+            summary_images=None,
+        )
+    except Exception as dump_error:
+        logger.error(f"Failed to write processed incident JSON: {dump_error}")
+        raise
+
+    elapsed = time.monotonic() - start_time
+    logger.info(f"Manual text processing completed in {elapsed:.2f}s. Output: {output_file}")
+    print(f"✅ Created: {output_file} ({elapsed:.2f}s)")
+    return output_file
+
+
 def process_manual_docx_only(incident_number):
     """Create a processed incident JSON using manual.docx content only."""
     logger.info(f"Starting manual.docx processing for incident {incident_number}")
@@ -361,6 +582,54 @@ def process_manual_docx_only(incident_number):
         raise
 
     logger.info(f"Manual processing completed. Output: {output_file}")
+    print(f"✅ Created: {output_file}")
+    return output_file
+
+def process_markdown_only(incident_number: str, markdown_path: str):
+    """Create a processed incident JSON using a markdown file content only."""
+    logger.info(f"Starting markdown file processing for incident {incident_number}")
+    print(f"Processing markdown file for incident {incident_number}...")
+
+    # Validate markdown file exists
+    if not os.path.exists(markdown_path):
+        error_msg = f"Markdown file not found at {markdown_path}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    try:
+        from transformer import dump_discussion_items_to_json
+    except Exception as import_error:
+        logger.error(f"Failed to import markdown helpers: {import_error}")
+        raise
+
+    try:
+        # Read the markdown file content
+        with open(markdown_path, 'r', encoding='utf-8') as f:
+            markdown_text = f.read()
+
+        if not markdown_text or not markdown_text.strip():
+            error_msg = f"Markdown file appears empty: {markdown_path}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        logger.info(f"Read {len(markdown_text)} characters from {markdown_path}")
+        print(f"📄 Read {len(markdown_text)} characters from {markdown_path}")
+
+        # Use the markdown content as the summary
+        final_summary = markdown_text.strip()
+
+        # Create the processed incident JSON
+        output_file, _ = dump_discussion_items_to_json(
+            [],
+            str(incident_number),
+            summary_content=final_summary,
+            summary_images=None,  # Markdown files don't contain embedded images
+        )
+    except Exception as dump_error:
+        logger.error(f"Failed to write processed incident JSON: {dump_error}")
+        raise
+
+    logger.info(f"Markdown processing completed. Output: {output_file}")
     print(f"✅ Created: {output_file}")
     return output_file
 
@@ -716,7 +985,8 @@ def _process_single_incident(processor, incident_data, prompts, prompt_type, deb
         'dev_pending_facilitation',
         'escalation',
         'mitigation',
-        'create_prompt_for_logs_analyze'
+        'create_prompt_for_logs_analyze',
+        'create_prompt_for_logs_analyze_linux'
     ]
 
     if processor.team_knowledge_manager:
@@ -872,21 +1142,61 @@ def main():
     parser.add_argument("--troubleshooting-plan", action="store_true", help="Generate troubleshooting plan mode - first incident is primary, others are historical references")
     parser.add_argument("--articles-embeddings", help="Path to article embeddings file (for article search mode)")
     parser.add_argument("--vector-db-path", help="Path to vector database file (for memory management)")
-    parser.add_argument("--manual-docx", action="store_true", help="Use manual.docx content instead of fetching incident data from Kusto")
+    parser.add_argument("--manual-docx", "--doc", "-doc", action="store_true", help="Use manual.docx content from fixed path instead of fetching incident data")
+    parser.add_argument("--manual", action="store_true", help="Use manual text content instead of fetching incident data")
+    parser.add_argument("--manual-file", help="Path to the manual text file to use with --manual (defaults to <project root>/manual.txt)")
+    parser.add_argument("--markdown-file", "--md", "-md", help="Path to markdown file with incident summary and discussion")
     parser.add_argument("--timing", action="store_true", help="Enable detailed timing analysis and reporting")
     parser.add_argument("--teams", "-t", action="store_true", help="Enable team knowledge and team matching (disabled by default)")
     parser.add_argument("--multi-incident", action="store_true", help="Process multiple incidents directly (for debugging or specific use cases)")
     parser.add_argument("--input-file", help="Path to a JSON file containing incident data (for single or multi-incident mode)")
-    
+    parser.add_argument("--use-azure-ad", action="store_true", help="Use Azure AD / managed identity for AI service (overrides .env USE_AZURE_AD for this run)")
+
     args = parser.parse_args(processed_args)
     enable_timing = args.timing
     manual_docx_mode = args.manual_docx
+    manual_txt_mode = args.manual
+    manual_txt_path = args.manual_file
+    markdown_file_mode = args.markdown_file
+    markdown_file_path = args.markdown_file
+
+    # Check for conflicts between input file modes
+    if manual_docx_mode and manual_txt_mode:
+        logger.error("--manual-docx and --manual cannot be combined")
+        print("Error: --manual-docx and --manual cannot be combined")
+        sys.exit(1)
+    if manual_docx_mode and markdown_file_mode:
+        logger.error("--manual-docx/-doc and --markdown-file/-md cannot be combined")
+        print("Error: --manual-docx/-doc and --markdown-file/-md cannot be combined")
+        sys.exit(1)
 
     if manual_docx_mode and args.input_file:
         logger.error("--manual-docx cannot be combined with --input-file")
         print("Error: --manual-docx cannot be combined with --input-file")
         sys.exit(1)
-    
+    if manual_txt_mode and args.input_file:
+        logger.error("--manual cannot be combined with --input-file")
+        print("Error: --manual cannot be combined with --input-file")
+        sys.exit(1)
+    if manual_txt_mode and markdown_file_mode:
+        logger.error("--manual and --markdown-file/-md cannot be combined")
+        print("Error: --manual and --markdown-file/-md cannot be combined")
+        sys.exit(1)
+    if manual_txt_path and not manual_txt_mode:
+        logger.error("--manual-file requires --manual")
+        print("Error: --manual-file requires --manual")
+        sys.exit(1)
+
+    if markdown_file_mode and args.input_file:
+        logger.error("--markdown-file/-md cannot be combined with --input-file")
+        print("Error: --markdown-file/-md cannot be combined with --input-file")
+        sys.exit(1)
+
+    # Apply Azure AD override from CLI (before any code uses config for AI)
+    from config import config
+    if getattr(args, 'use_azure_ad', False):
+        config.use_azure_ad = True
+
     # Handle --input-file mode early (works for both single and multi-incident)
     if args.input_file:
         # Handle --multi-incident mode with input file
@@ -900,8 +1210,11 @@ def main():
             try:
                 from processor import IncidentProcessor, load_prompts
 
-                # Load prompts
-                prompts = load_prompts(args.prompt)
+                # Load prompts (free_text: generate from user input; else load from prompts.json)
+                if args.prompt == 'free_text':
+                    prompts = get_free_text_prompts()
+                else:
+                    prompts = load_prompts(args.prompt)
                 
                 # Initialize processor
                 processor = IncidentProcessor(
@@ -965,20 +1278,21 @@ def main():
                 else:
                     prompt_type = args.prompt
                 
-                # Validate prompt type
-                try:
-                    with open("prompts.json", "r", encoding="utf-8") as f:
-                        prompts_dict = json.load(f)
-                    if prompt_type not in prompts_dict:
-                        available = list(prompts_dict.keys())
-                        error_msg = f"Prompt type '{prompt_type}' not found. Available types: {available}"
-                        logger.error(error_msg)
-                        print(error_msg)
+                # Validate prompt type (skip for free_text - prompts are generated from user input)
+                if prompt_type != 'free_text':
+                    try:
+                        with open("prompts.json", "r", encoding="utf-8") as f:
+                            prompts_dict = json.load(f)
+                        if prompt_type not in prompts_dict:
+                            available = list(prompts_dict.keys())
+                            error_msg = f"Prompt type '{prompt_type}' not found. Available types: {available}"
+                            logger.error(error_msg)
+                            print(error_msg)
+                            sys.exit(1)
+                    except Exception as e:
+                        logger.error(f"Error reading prompts.json: {e}")
+                        print(f"Error reading prompts.json: {e}")
                         sys.exit(1)
-                except Exception as e:
-                    logger.error(f"Error reading prompts.json: {e}")
-                    print(f"Error reading prompts.json: {e}")
-                    sys.exit(1)
                 
                 # Set default vector database path if needed
                 if prompt_type == 'article_search' and not args.vector_db_path:
@@ -989,9 +1303,12 @@ def main():
                         logger.info(f"🔍 Article search mode detected - automatically using vector database: {default_vector_db_path}")
                         print(f"🔍 Article search mode detected - automatically using vector database: {default_vector_db_path}")
                 
-                # Load prompts
+                # Load prompts (free_text: generate from user input; else load from prompts.json)
                 from processor import IncidentProcessor, load_prompts
-                prompts = load_prompts(prompt_type)
+                if prompt_type == 'free_text':
+                    prompts = get_free_text_prompts()
+                else:
+                    prompts = load_prompts(prompt_type)
                 
                 # Initialize processor
                 processor = IncidentProcessor(
@@ -1073,14 +1390,32 @@ def main():
         logger.error("--manual-docx cannot be combined with --troubleshooting-plan")
         print("Error: --manual-docx cannot be combined with --troubleshooting-plan")
         sys.exit(1)
+    if manual_txt_mode and troubleshooting_plan_mode:
+        logger.error("--manual cannot be combined with --troubleshooting-plan")
+        print("Error: --manual cannot be combined with --troubleshooting-plan")
+        sys.exit(1)
+
+    if markdown_file_mode and troubleshooting_plan_mode:
+        logger.error("--markdown-file/-md cannot be combined with --troubleshooting-plan")
+        print("Error: --markdown-file/-md cannot be combined with --troubleshooting-plan")
+        sys.exit(1)
 
     if manual_docx_mode and multi_incident_mode:
         logger.error("--manual-docx cannot be combined with --multi-incident")
         print("Error: --manual-docx cannot be combined with --multi-incident")
         sys.exit(1)
+    if manual_txt_mode and multi_incident_mode:
+        logger.error("--manual cannot be combined with --multi-incident")
+        print("Error: --manual cannot be combined with --multi-incident")
+        sys.exit(1)
+
+    if markdown_file_mode and multi_incident_mode:
+        logger.error("--markdown-file/-md cannot be combined with --multi-incident")
+        print("Error: --markdown-file/-md cannot be combined with --multi-incident")
+        sys.exit(1)
     
-    # Set default values from config if not provided
-    if not articles_embeddings:
+    # Set default values from config only when needed (article_search); avoids loading HuggingFace model for other prompts
+    if not articles_embeddings and prompt_type == 'article_search':
         from config import config
         articles_embeddings = config.default_vector_db_path
 
@@ -1115,22 +1450,23 @@ def main():
         else:
             logger.info(f"Using specified prompt type: {prompt_type}")
 
-    # Validate prompt_type before proceeding
-    logger.info("Validating prompt type...")
-    try:
-        with open("prompts.json", "r", encoding="utf-8") as f:
-            prompts = json.load(f)
-        if prompt_type not in prompts:
-            available = list(prompts.keys())
-            error_msg = f"Prompt type '{prompt_type}' not found. Available types: {available}"
-            logger.error(error_msg)
-            print(error_msg)
+    # Validate prompt_type before proceeding (skip for free_text - prompts are generated from user input)
+    if prompt_type != 'free_text':
+        logger.info("Validating prompt type...")
+        try:
+            with open("prompts.json", "r", encoding="utf-8") as f:
+                prompts = json.load(f)
+            if prompt_type not in prompts:
+                available = list(prompts.keys())
+                error_msg = f"Prompt type '{prompt_type}' not found. Available types: {available}"
+                logger.error(error_msg)
+                print(error_msg)
+                sys.exit(1)
+            logger.info(f"Prompt type '{prompt_type}' validated successfully")
+        except Exception as e:
+            logger.error(f"Error reading prompts.json: {e}")
+            print(f"Error reading prompts.json: {e}")
             sys.exit(1)
-        logger.info(f"Prompt type '{prompt_type}' validated successfully")
-    except Exception as e:
-        logger.error(f"Error reading prompts.json: {e}")
-        print(f"Error reading prompts.json: {e}")
-        sys.exit(1)
 
     # Auto-detect vector database path for article search mode
     if prompt_type == 'article_search' and not vector_db_path:
@@ -1145,23 +1481,158 @@ def main():
             print("⚠️ Article search mode detected but DEFAULT_VECTOR_DB_PATH not set in .env file")
 
     successful_incidents = []
+    preloaded_prompts = None  # set when prompt_type == 'free_text' and we run prompt generation in parallel
 
     if manual_docx_mode:
-        logger.info("Manual docx mode enabled; skipping database fetch and CSV processing")
         if len(incident_numbers) != 1:
             error_msg = "--manual-docx requires exactly one incident number"
             logger.error(error_msg)
             print(f"Error: {error_msg}")
             sys.exit(1)
-
         incident_number = incident_numbers[0]
-        try:
-            process_manual_docx_only(incident_number)
+
+        if prompt_type == 'free_text':
+            # Free text + manual docx: collect prompt first, then run generator LLM and manual.docx in parallel
+            logger.info("Manual docx mode + free text: prompt first, then manual.docx and prompt generation in parallel")
+            print("Free text + manual.docx: enter your prompt below. Press Enter on an empty line to submit.")
+            user_description = read_free_text_input()
+            docx_result = {"success": False, "error": None}
+
+            def run_manual_docx():
+                try:
+                    process_manual_docx_only(incident_number)
+                    docx_result["success"] = True
+                except Exception as e:
+                    docx_result["error"] = e
+
+            docx_thread = threading.Thread(target=run_manual_docx)
+            docx_thread.start()
+            preloaded_prompts = get_free_text_prompts(user_description)
+            docx_thread.join()
+
+            if not docx_result["success"]:
+                err = docx_result["error"]
+                logger.error(f"Manual docx processing failed: {err}")
+                print(f"Error: {err}")
+                sys.exit(1)
             successful_incidents.append(incident_number)
-        except Exception as manual_error:
-            logger.error(f"Manual docx processing failed: {manual_error}")
-            print(f"Error: {manual_error}")
+        else:
+            logger.info("Manual docx mode enabled; skipping database fetch and CSV processing")
+            try:
+                process_manual_docx_only(incident_number)
+                successful_incidents.append(incident_number)
+            except Exception as manual_error:
+                logger.error(f"Manual docx processing failed: {manual_error}")
+                print(f"Error: {manual_error}")
+                sys.exit(1)
+    elif manual_txt_mode:
+        if len(incident_numbers) != 1:
+            error_msg = "--manual requires exactly one incident number"
+            logger.error(error_msg)
+            print(f"Error: {error_msg}")
             sys.exit(1)
+        incident_number = incident_numbers[0]
+
+        if prompt_type == 'free_text':
+            logger.info("Manual txt mode + free text: prompt first, then manual text processing and prompt generation in parallel")
+            print("Free text + manual text: enter your prompt below. Press Enter on an empty line to submit.")
+            user_description = read_free_text_input()
+            txt_result = {"success": False, "error": None}
+
+            def run_manual_txt():
+                try:
+                    process_manual_txt_only(incident_number, manual_txt_path)
+                    txt_result["success"] = True
+                except Exception as e:
+                    txt_result["error"] = e
+
+            txt_thread = threading.Thread(target=run_manual_txt)
+            txt_thread.start()
+            preloaded_prompts = get_free_text_prompts(user_description)
+            txt_thread.join()
+
+            if not txt_result["success"]:
+                err = txt_result["error"]
+                logger.error(f"Manual txt processing failed: {err}")
+                print(f"Error: {err}")
+                sys.exit(1)
+            successful_incidents.append(incident_number)
+        else:
+            logger.info("Manual txt mode enabled; skipping database fetch and CSV processing")
+            try:
+                process_manual_txt_only(incident_number, manual_txt_path)
+                successful_incidents.append(incident_number)
+            except Exception as manual_error:
+                logger.error(f"Manual txt processing failed: {manual_error}")
+                print(f"Error: {manual_error}")
+                sys.exit(1)
+    elif markdown_file_mode:
+        if len(incident_numbers) != 1:
+            error_msg = "--markdown-file/-md requires exactly one incident number"
+            logger.error(error_msg)
+            print(f"Error: {error_msg}")
+            sys.exit(1)
+        incident_number = incident_numbers[0]
+
+        if prompt_type == 'free_text':
+            # Free text + markdown file: collect prompt first, then run generator LLM and markdown processing in parallel
+            logger.info("Markdown file mode + free text: prompt first, then markdown and prompt generation in parallel")
+            print(f"Free text + markdown: enter your prompt below. Press Enter on an empty line to submit.")
+            user_description = read_free_text_input()
+            md_result = {"success": False, "error": None}
+
+            def run_markdown():
+                try:
+                    process_markdown_only(incident_number, markdown_file_path)
+                    md_result["success"] = True
+                except Exception as e:
+                    md_result["error"] = e
+
+            md_thread = threading.Thread(target=run_markdown)
+            md_thread.start()
+            preloaded_prompts = get_free_text_prompts(user_description)
+            md_thread.join()
+
+            if not md_result["success"]:
+                err = md_result["error"]
+                logger.error(f"Markdown file processing failed: {err}")
+                print(f"Error: {err}")
+                sys.exit(1)
+            successful_incidents.append(incident_number)
+        else:
+            logger.info(f"Markdown file mode enabled; using {markdown_file_path}")
+            try:
+                process_markdown_only(incident_number, markdown_file_path)
+                successful_incidents.append(incident_number)
+            except Exception as md_error:
+                logger.error(f"Markdown file processing failed: {md_error}")
+                print(f"Error: {md_error}")
+                sys.exit(1)
+    elif prompt_type == 'free_text':
+        # Free text: collect prompt first (no background output while typing), then fetch+transform and prompt generation in parallel
+        print("Free text mode: enter your prompt below. Press Enter on an empty line to submit.")
+        user_description = read_free_text_input()
+        print("Fetching incident data and generating prompt...")
+        fetch_result = {"successful_incidents": []}
+
+        def run_fetch_and_transform():
+            logger.info("=" * 50)
+            logger.info("STEP 1: Fetching data from database (parallel)")
+            logger.info("=" * 50)
+            fetch_result["successful_incidents"] = _fetch_and_transform_incidents(incident_numbers)
+
+        fetch_thread = threading.Thread(target=run_fetch_and_transform)
+        fetch_thread.start()
+        preloaded_prompts = get_free_text_prompts(user_description)
+        fetch_thread.join()
+        successful_incidents = fetch_result["successful_incidents"]
+
+        if not successful_incidents:
+            logger.error("No incidents were successfully fetched or processed. Exiting.")
+            print("No incidents were successfully fetched or processed. Exiting.")
+            sys.exit(1)
+        logger.info(f"Successfully fetched data for {len(successful_incidents)} incident(s): {successful_incidents}")
+        print(f"Successfully fetched data for {len(successful_incidents)} incident(s): {', '.join(successful_incidents)}")
     else:
         # Step 1: Fetch data for all incidents from database
         logger.info("=" * 50)
@@ -1217,6 +1688,8 @@ def main():
         ]
         if enable_team_analysis:
             ai_cmd.append("--teams")
+        if args.use_azure_ad:
+            ai_cmd.append("--use-azure-ad")
     elif len(successful_incidents) > 1:
         logger.info("Combining multiple incidents for unified processing...")
         combined_json_path = combine_incident_data(successful_incidents)
@@ -1231,8 +1704,13 @@ def main():
             with open(combined_json_path, 'r', encoding='utf-8') as f:
                 incident_data = json.load(f)
             
-            # Load prompts
-            prompts = load_prompts(prompt_type)
+            # Load prompts (free_text: use preloaded from parallel step or generate; else load from prompts.json)
+            if prompt_type == 'free_text' and preloaded_prompts is not None:
+                prompts = preloaded_prompts
+            elif prompt_type == 'free_text':
+                prompts = get_free_text_prompts()
+            else:
+                prompts = load_prompts(prompt_type)
             
             # Initialize processor (always uses AI Service GPT-5)
             processor = IncidentProcessor(
@@ -1265,6 +1743,8 @@ def main():
             ]
             if enable_team_analysis:
                 ai_cmd.append("--teams")
+            if args.use_azure_ad:
+                ai_cmd.append("--use-azure-ad")
             
             logger.info(f"Falling back to subprocess: {' '.join(ai_cmd)}")
             
@@ -1289,8 +1769,13 @@ def main():
             with open(json_path, 'r', encoding='utf-8') as f:
                 incident_data = json.load(f)
             
-            # Load prompts
-            prompts = load_prompts(prompt_type)
+            # Load prompts (free_text: use preloaded from parallel step or generate; else load from prompts.json)
+            if prompt_type == 'free_text' and preloaded_prompts is not None:
+                prompts = preloaded_prompts
+            elif prompt_type == 'free_text':
+                prompts = get_free_text_prompts()
+            else:
+                prompts = load_prompts(prompt_type)
             
             # Initialize processor (always uses AI Service GPT-5)
             processor = IncidentProcessor(
@@ -1333,6 +1818,8 @@ def main():
                 ai_cmd.extend(["--vector-db-path", vector_db_path])
             if enable_team_analysis:
                 ai_cmd.append("--teams")
+            if args.use_azure_ad:
+                ai_cmd.append("--use-azure-ad")
             
             logger.info(f"Falling back to subprocess: {' '.join(ai_cmd)}")
             

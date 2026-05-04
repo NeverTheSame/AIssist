@@ -50,6 +50,12 @@ class Config:
         self.ai_service_model_name = os.environ.get('AI_SERVICE_MODEL_NAME')
         self.ai_service_deployment_name = os.environ.get('AI_SERVICE_DEPLOYMENT_NAME')
         self.ai_service_api_version = os.environ.get('AI_SERVICE_API_VERSION')
+        # Optional: faster/smaller model for free-text prompt generation (e.g. gpt-5-nano). If unset, uses AI_SERVICE_DEPLOYMENT_NAME.
+        self.free_text_prompt_deployment_name = os.environ.get('FREE_TEXT_PROMPT_DEPLOYMENT_NAME') or None
+
+        # Azure AD Authentication Configuration
+        self.use_azure_ad = os.environ.get('USE_AZURE_AD', 'false').lower() == 'true'
+        self.ai_resource_name = os.environ.get('AI_RESOURCE_NAME')
         
         # Database Configuration (ICM)
         self.database_cluster = os.environ.get('DATABASE_CLUSTER', 'https://your-cluster.kusto.windows.net')
@@ -84,24 +90,30 @@ class Config:
     
     def _validate_config(self):
         """Validate that required configuration is present."""
-        # Check AI Service configuration (required)
-        ai_service_config = {
-            'AI_SERVICE_API_KEY': self.ai_service_api_key,
-            'AI_SERVICE_ENDPOINT': self.ai_service_endpoint,
-            'AI_SERVICE_API_VERSION': self.ai_service_api_version,
-            'AI_SERVICE_DEPLOYMENT_NAME': self.ai_service_deployment_name,
-            'AI_SERVICE_MODEL_NAME': self.ai_service_model_name
-        }
-        
-        # Validate that AI Service configuration is complete
-        ai_service_complete = all(ai_service_config.values())
-        
-        if not ai_service_complete:
-            missing_vars = [k for k, v in ai_service_config.items() if not v]
-            raise ValueError(
-                f"Missing required AI Service environment variables: {', '.join(missing_vars)}. "
-                "Please check your .env file configuration."
-            )
+        if self.use_azure_ad:
+            # For Azure AD, API key is optional
+            required = {
+                'AI_SERVICE_ENDPOINT': self.ai_service_endpoint,
+                'AI_SERVICE_API_VERSION': self.ai_service_api_version,
+                'AI_SERVICE_DEPLOYMENT_NAME': self.ai_service_deployment_name
+            }
+            missing = [k for k, v in required.items() if not v]
+            if missing:
+                raise ValueError(f"Missing required config for Azure AD: {', '.join(missing)}")
+            if not self.ai_service_api_key:
+                print("Note: Using Azure AD authentication (API key not required)")
+        else:
+            # Original validation for API key auth
+            ai_service_config = {
+                'AI_SERVICE_API_KEY': self.ai_service_api_key,
+                'AI_SERVICE_ENDPOINT': self.ai_service_endpoint,
+                'AI_SERVICE_API_VERSION': self.ai_service_api_version,
+                'AI_SERVICE_DEPLOYMENT_NAME': self.ai_service_deployment_name,
+                'AI_SERVICE_MODEL_NAME': self.ai_service_model_name
+            }
+            if not all(ai_service_config.values()):
+                missing = [k for k, v in ai_service_config.items() if not v]
+                raise ValueError(f"Missing config: {', '.join(missing)}")
         
         # Validate Azure DevOps PAT if needed (optional, will be checked when Azure DevOps client is used)
         if not self.azure_devops_pat:
@@ -110,4 +122,4 @@ class Config:
             pass
 
 # Create a global config instance
-config = Config() 
+config = Config()

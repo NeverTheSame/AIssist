@@ -13,6 +13,7 @@ except Exception:
 import openai
 from openai import AzureOpenAI
 from config import config
+from azure_auth import get_openai_client_with_auth
 from functools import cmp_to_key
 import re
 
@@ -137,11 +138,7 @@ class ArticleSearcher:
     def _init_client(self):
         """Initialize Azure Router client (GPT-5)."""
         try:
-            self.client = AzureOpenAI(
-                api_key=config.ai_service_api_key,
-                azure_endpoint=config.ai_service_endpoint,
-                api_version=config.ai_service_api_version
-            )
+            self.client, _ = get_openai_client_with_auth(config)
             self.deployment_name = config.ai_service_deployment_name
             logger.info("Initialized Azure Router client (GPT-5)")
         except Exception as e:
@@ -151,11 +148,7 @@ class ArticleSearcher:
     def _init_embedding_client(self):
         """Initialize embedding client (uses Azure Router)."""
         try:
-            self.embedding_client = AzureOpenAI(
-                api_key=config.ai_service_api_key,
-                azure_endpoint=config.ai_service_endpoint,
-                api_version=config.ai_service_api_version
-            )
+            self.embedding_client, _ = get_openai_client_with_auth(config)
             logger.info("Initialized embedding client with Azure Router")
         except Exception as e:
             logger.warning(f"Failed to initialize embedding client: {e}")

@@ -452,7 +452,8 @@ REASONING: [brief explanation]"""
                 model=processor.deployment_name,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=500
+                max_tokens=500,
+                timeout=60,
             )
             
             result_text = response.choices[0].message.content.strip()
@@ -691,8 +692,8 @@ REASONING: [brief explanation]"""
         
         for field_name, field_value in fields.items():
             field_name_lower = field_name.lower()
-            # Match IcM Incident IDs - look for fields containing "icm", "incident", and "id" or "ids"
-            if 'icm' in field_name_lower and 'incident' in field_name_lower and ('id' in field_name_lower or 'ids' in field_name_lower):
+            # Match IcM Incident IDs - look for fields containing "icm", "incident", and "id"/"ids" but NOT "count"
+            if 'icm' in field_name_lower and 'incident' in field_name_lower and ('id' in field_name_lower or 'ids' in field_name_lower) and 'count' not in field_name_lower:
                 if icm_incident_ids_ref is None:  # Take the first match
                     icm_incident_ids_ref = field_name
                     logger.debug(f"Found IcM Incident IDs field: {field_name} = {field_value}")
@@ -801,6 +802,43 @@ REASONING: [brief explanation]"""
             logger.error(f"Error creating work item: {e}")
             return None
     
+    def close_work_item(self, work_item_id: int, reason: str) -> bool:
+        """
+        Close a work item by setting its state to Closed and appending a reason to the description.
+
+        Args:
+            work_item_id: Work item ID to close
+            reason: Explanation of why the item was closed (written into Description)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        patch_operations = [
+            {
+                "op": "add",
+                "path": "/fields/System.State",
+                "value": "Closed"
+            },
+            {
+                "op": "add",
+                "path": "/fields/System.Description",
+                "value": reason
+            }
+        ]
+
+        url = f"{self.base_url}/_apis/wit/workitems/{work_item_id}?api-version={self.api_version}"
+        headers = {
+            'Content-Type': 'application/json-patch+json'
+        }
+
+        try:
+            response = self._make_request('PATCH', url, data=patch_operations, headers=headers)
+            logger.info(f"Successfully closed work item #{work_item_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error closing work item {work_item_id}: {e}")
+            return False
+
     def get_work_item_url(self, work_item_id: int) -> str:
         """Get the web URL for a work item."""
         return f"{self.base_url}/_workitems/edit/{work_item_id}"

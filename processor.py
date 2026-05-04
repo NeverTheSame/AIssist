@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 from openai import AzureOpenAI
 import tiktoken
+from azure_auth import get_openai_client_with_auth
 from config import config
 import argparse
 from typing import List, Dict, Any
@@ -235,19 +236,27 @@ class IncidentProcessor:
                 self.article_searcher = None
         
         # Initialize Azure Router client (GPT-5)
-        if not all([config.ai_service_api_key, config.ai_service_endpoint, 
-                   config.ai_service_api_version, config.ai_service_deployment_name]):
-            raise ValueError("AI Service configuration is incomplete. Please check your .env file.")
-        
+        # Check for required config based on auth method
+        if config.use_azure_ad:
+            required = {
+                'endpoint': config.ai_service_endpoint,
+                'deployment': config.ai_service_deployment_name,
+                'api_version': config.ai_service_api_version
+            }
+            missing = [k for k, v in required.items() if not v]
+            if missing:
+                raise ValueError(f"Missing required config for Azure AD: {', '.join(missing)}")
+        else:
+            if not all([config.ai_service_api_key, config.ai_service_endpoint,
+                       config.ai_service_api_version, config.ai_service_deployment_name]):
+                raise ValueError("AI Service configuration is incomplete. Please check your .env file.")
+
         # Set default timeout to 300 seconds (5 minutes) to prevent indefinite hangs
         self.llm_timeout = 300
-        
-        self.client = AzureOpenAI(
-            api_key=config.ai_service_api_key,
-            api_version=config.ai_service_api_version,
-            azure_endpoint=config.ai_service_endpoint,
-            timeout=self.llm_timeout
-        )
+
+        # Create client using appropriate authentication method
+        self.client, self.auth_method = get_openai_client_with_auth(config)
+        logger.info(f"Initialized AzureOpenAI client using {self.auth_method} authentication")
         self.deployment_name = config.ai_service_deployment_name
         self.model_costs = {
             "input": config.input_cost,
@@ -488,6 +497,7 @@ class IncidentProcessor:
             memory_enhanced = False
             if self.memory_manager and incident_data:
                 try:
+                    mem_start = time.monotonic()
                     with self.time_memory_operation("memory_enhancement", "enhance_prompt"):
                         original_prompt = enhanced_user_prompt
                         enhanced_user_prompt = self.memory_manager.enhance_prompt_with_memory(
@@ -497,8 +507,9 @@ class IncidentProcessor:
                         # Only claim enhancement if the prompt was actually changed
                         if enhanced_user_prompt != original_prompt:
                             memory_enhanced = True
-                            logger.info("Enhanced prompt with memory context")
-                            print(f"🧠 Enhanced prompt with memory context from previous incidents")
+                            mem_elapsed = time.monotonic() - mem_start
+                            logger.info(f"Enhanced prompt with memory context in {mem_elapsed:.2f}s")
+                            print(f"🧠 Enhanced prompt with memory context from previous incidents ({mem_elapsed:.2f}s)")
                         else:
                             logger.info("Memory search completed but no relevant context found")
                     if not memory_enhanced:
@@ -603,6 +614,28 @@ class IncidentProcessor:
 
             if debug_api:
                 print("\n[DEBUG_API] LLM API request body:")
+                max_show = 2000  # chars per message to show in console
+                for i, msg in enumerate(messages):
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if content is None:
+                        content = ""
+                    if isinstance(content, list):
+                        parts = []
+                        for part in content:
+                            if part.get("type") == "text":
+                                text = part.get("text", part.get("content", "")) or ""
+                                parts.append(f"[text, len={len(text)}]: {repr(text[:max_show])}{'...' if len(text) > max_show else ''}")
+                            else:
+                                parts.append(f"[{part.get('type')}]: {str(part)[:200]}...")
+                        content_repr = "\n  ".join(parts)
+                        content_len = "multimodal"
+                    else:
+                        content_len = len(content)
+                        content_repr = repr(content[:max_show]) + ("..." if len(content) > max_show else "")
+                    print(f"  [{i}] role={role}, content length={content_len}")
+                    print(f"      content preview: {content_repr}")
+                print(f"  model={self.deployment_name}, temperature=0.7, max_tokens=8000")
 
             # Use Azure Router (GPT-5)
             model_name = self.deployment_name
@@ -621,6 +654,7 @@ class IncidentProcessor:
             model_name = self.deployment_name
             
             # Generate summary with timing using Azure Router (GPT-5)
+            llm_start = time.monotonic()
             print(f"🤖 Starting LLM call with {model_name}...")
             
             # Retry logic for timeout and connection errors
@@ -667,6 +701,9 @@ class IncidentProcessor:
             if 'response' not in locals():
                 print(f"❌ LLM call failed after {max_retries} attempts")
                 raise last_error if last_error else Exception("LLM call failed for unknown reason")
+
+            llm_elapsed = time.monotonic() - llm_start
+            print(f"⏱ LLM call completed in {llm_elapsed:.2f}s")
             # Get output tokens and calculate cost
             with self.time_context("process_llm_response", "ai", {"response_length": len(response.choices[0].message.content)}):
                 output_tokens = response.usage.completion_tokens
@@ -2065,41 +2102,30 @@ Respond in JSON format:
             return {"error": str(e)}
     
     def _perform_sequential_thinking_analysis(self, incident_data: Dict[str, Any], log_analysis: Dict[str, Any]) -> str:
-        """Use Sequential Thinking MCP to analyze the problem systematically."""
+        """Use Sequential Thinking MCP to analyze the problem systematically. Returns actual evidence excerpts, not verbal summary."""
         try:
-            # Extract key information for analysis
             summary = incident_data.get('summary', '')
-            conversation = incident_data.get('conversation', [])
-            
-            # Build generic analysis prompt
-            analysis_prompt = f"""
-            Analyze this incident systematically:
-            
-            INCIDENT: {summary[:500]}
-            
-            LOG FINDINGS:
-            - Available log files: {list(log_analysis.get('log_files', {}).keys())}
-            - Log analysis results: {log_analysis.get('analyzer_path', 'Not available')}
-            
-            Use sequential thinking to:
-            1. Identify the core problem
-            2. Analyze potential root causes
-            3. Evaluate evidence from logs
-            4. Develop hypothesis about what's wrong
-            5. Propose systematic troubleshooting approach
-            """
-            
-            # Return a generic structured analysis
-            return f"""Sequential Analysis:
-            
-            Problem: {summary[:200]}...
-            Key Evidence: 
-            - Log files analyzed: {len(log_analysis.get('log_files', {}))}
-            - Analysis path: {log_analysis.get('analyzer_path', 'unknown')}
-            
-            Hypothesis: Issue requires systematic investigation based on log evidence
-            Next Steps: Review log findings and apply appropriate troubleshooting procedures"""
-            
+            log_files = log_analysis.get('log_files', {})
+            analyzer_path = log_analysis.get('analyzer_path', 'unknown')
+            excerpt_len = 400  # chars of real content per file for evidence
+
+            parts = [
+                "Sequential Analysis:",
+                "",
+                f"Problem: {summary[:500]}{'...' if len(summary) > 500 else ''}",
+                "",
+                "Key Evidence (actual log excerpts):",
+                f"Analysis path: {analyzer_path}",
+                ""
+            ]
+            for log_file, content in (log_files or {}).items():
+                parts.append(f"--- {log_file} ---")
+                parts.append(content[:excerpt_len] + ("..." if len(content) > excerpt_len else ""))
+                parts.append("")
+
+            parts.append("Next Steps: Review the log excerpts above and apply troubleshooting procedures.")
+            return "\n".join(parts).strip()
+
         except Exception as e:
             logger.error(f"Error in sequential thinking analysis: {e}")
             return f"Sequential analysis failed: {e}"
@@ -2146,29 +2172,33 @@ Respond in JSON format:
             return f"Online research failed: {e}"
     
     def _perform_comprehensive_file_analysis(self, log_analysis: Dict[str, Any]) -> str:
-        """Use File Browsing MCP to perform comprehensive file analysis."""
+        """Use File Browsing MCP to perform comprehensive file analysis. Returns actual log content, not verbal summaries."""
         try:
             analysis_results = []
-            
-            # Generic file analysis
+            max_chars_per_file = 2000  # Include real content up to this length per file
+
+            # Log files: include actual content (excerpts), not just character counts
             log_files = log_analysis.get('log_files', {})
             if log_files:
-                analysis_results.append("Log File Analysis:")
+                analysis_results.append("Log File Analysis (actual content):")
                 for log_file, content in log_files.items():
-                    analysis_results.append(f"- {log_file}: {len(content)} characters")
-                    # Look for common error patterns
-                    if 'error' in content.lower() or 'fail' in content.lower():
-                        analysis_results.append(f"  Contains error indicators")
-                    if 'warn' in content.lower():
-                        analysis_results.append(f"  Contains warning indicators")
-            
-            # Analyze additional logs if available
+                    analysis_results.append(f"\n--- {log_file} (total {len(content)} chars) ---")
+                    excerpt = content[:max_chars_per_file]
+                    if len(content) > max_chars_per_file:
+                        excerpt += f"\n... [truncated, {len(content) - max_chars_per_file} more chars]"
+                    analysis_results.append(excerpt)
+
+            # Additional logs: include actual content
             additional_logs = log_analysis.get('additional_logs', {})
             if additional_logs:
-                analysis_results.append("\nAdditional Logs Analysis:")
+                analysis_results.append("\n\nAdditional Logs (actual content):")
                 for log_file, content in additional_logs.items():
-                    analysis_results.append(f"- {log_file}: {len(content)} characters")
-            
+                    analysis_results.append(f"\n--- {log_file} (total {len(content)} chars) ---")
+                    excerpt = content[:max_chars_per_file]
+                    if len(content) > max_chars_per_file:
+                        excerpt += f"\n... [truncated, {len(content) - max_chars_per_file} more chars]"
+                    analysis_results.append(excerpt)
+
             return "\n".join(analysis_results)
             
         except Exception as e:
@@ -2322,6 +2352,7 @@ CRITICAL INSTRUCTIONS:
     def save_to_json(self, content, incident_number, output_dir="processed_incidents", ai_summary=None, also_save_to_summaries=True, prompt_type=None, operation_time=None, model_name=None):
         """Save processed content and summary to JSON file. Optionally also save to summaries/ for compatibility."""
         try:
+            save_start = time.monotonic()
             # Create output directory if it doesn't exist
             os.makedirs(output_dir, exist_ok=True)
             
@@ -2338,8 +2369,9 @@ CRITICAL INSTRUCTIONS:
             output_file = os.path.join(output_dir, f"incident_{incident_number}.json")
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(output_data, f, indent=2, ensure_ascii=False)
-            logger.info(f"Saved processed content to {output_file}")
-            print(f"✅ Created: {output_file}")
+            save_elapsed = time.monotonic() - save_start
+            logger.info(f"Saved processed content to {output_file} in {save_elapsed:.2f}s")
+            print(f"✅ Created: {output_file} ({save_elapsed:.2f}s)")
 
             # Also save to summaries/{incident_number}.json for compatibility
             if also_save_to_summaries:
@@ -2424,7 +2456,11 @@ def main():
     parser.add_argument('--teams', '-t', action='store_true', help='Enable team knowledge and team matching for this processing session')
     parser.add_argument('--articles-embeddings', help='Path to article embeddings file (for article search mode)')
     parser.add_argument('--vector-db-path', help='Path to vector database file (for article search mode)')
+    parser.add_argument('--use-azure-ad', action='store_true', help='Use Azure AD / managed identity for AI service (overrides .env for this run)')
     args = parser.parse_args()
+
+    if getattr(args, 'use_azure_ad', False):
+        config.use_azure_ad = True
 
     try:
         # Load prompts

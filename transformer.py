@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from docx import Document
 from openai import AzureOpenAI
 from config import config
+from azure_auth import get_openai_client_with_auth
 
 # Configure logging
 def setup_logging():
@@ -199,8 +200,8 @@ def dump_discussion_items_to_json(discussion_items, incident_number, output_dir=
         }
         formatted_discussion_items.append(formatted_discussion_item)
 
-    # Sort by timestamp
-    formatted_discussion_items.sort(key=lambda x: x['timestamp'])
+    # Sort by timestamp (use '' for None so comparison never fails)
+    formatted_discussion_items.sort(key=lambda x: x['timestamp'] or '')
 
 
 
@@ -230,7 +231,6 @@ def dump_discussion_items_to_json(discussion_items, incident_number, output_dir=
         json.dump(output_data, f, indent=2, ensure_ascii=False)
 
     logger.info(f"Processed {len(formatted_discussion_items)} entries (filtered out {filtered_count} unwanted entries)")
-    print(f"✅ Created: {output_file}")
 
     return output_file, filtered_count
 
@@ -407,13 +407,9 @@ def extract_summary_from_docx_text(docx_text):
     """
     try:
         logger.info("Initializing Azure Router client for summary extraction")
-        
+
         # Initialize Azure OpenAI client (Azure Router)
-        client = AzureOpenAI(
-            api_key=config.ai_service_api_key,
-            api_version=config.ai_service_api_version,
-            azure_endpoint=config.ai_service_endpoint
-        )
+        client, _ = get_openai_client_with_auth(config)
         
         # Create prompt for LLM to extract ALL content from manual docx (verbatim content extraction)
         system_prompt = (
