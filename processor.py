@@ -94,7 +94,7 @@ def run_gap_analysis_inline(incident_id: str, articles: List[Dict[str, Any]], ar
         article_searcher = ArticleSearcher(
             articles_path=None,  # Not used for pre-computed embeddings
             vector_db_path=articles_path,  # JSON embeddings file goes here
-            use_azure_router=use_azure_router
+            use_ai_service=use_ai_service
         )
         
         # Run the gap analysis using the existing function
@@ -162,8 +162,8 @@ logger = setup_logging()
 
 class IncidentProcessor:
     def __init__(self, enable_memory=True, articles_path=None, vector_db_path=None, enable_team_analysis=False, enable_timing=False):
-        # Always use Azure Router (GPT-5)
-        self.use_azure_router = True
+        # Always use AI Service (GPT-5)
+        self.use_ai_service = True
         self.enable_timing = enable_timing
 
         # Import timing utilities if timing is enabled
@@ -228,14 +228,14 @@ class IncidentProcessor:
                 self.article_searcher = ArticleSearcher(
                     articles_path=None,  # Not used for pre-computed embeddings
                     vector_db_path=articles_path,  # JSON embeddings file goes here
-                    use_azure_router=True
+                    use_ai_service=True
                 )
                 logger.info("Article searcher initialized successfully")
             except Exception as e:
                 logger.warning(f"Failed to initialize article searcher: {e}. Continuing without article search.")
                 self.article_searcher = None
         
-        # Initialize Azure Router client (GPT-5)
+        # Initialize AI Service client (GPT-5)
         # Check for required config based on auth method
         if config.use_azure_ad:
             required = {
@@ -262,7 +262,7 @@ class IncidentProcessor:
             "input": config.input_cost,
             "output": config.output_cost
         }
-        self.use_million_tokens = False  # Azure Router costs are per 1K tokens
+        self.use_million_tokens = False  # AI Service costs are per 1K tokens
         
         # Initialize team analyzer with LLM client if team analysis is enabled
         if enable_team_analysis and self.team_detector and self.team_knowledge_manager:
@@ -408,8 +408,8 @@ class IncidentProcessor:
             cleaned_summary = self.clean_azure_support_info(summary)
             parts.append(f"--- Authored Summary ---\n{cleaned_summary}")
 
-        # Add ICM conversation
-        parts.append(f"--- ICM Discussion ---\n{conversation_text}")
+        # Add incident conversation
+        parts.append(f"--- Incident Discussion ---\n{conversation_text}")
 
         # Add Teams discussion if available
         if teams_discussion:
@@ -637,7 +637,7 @@ class IncidentProcessor:
                     print(f"      content preview: {content_repr}")
                 print(f"  model={self.deployment_name}, temperature=0.7, max_tokens=8000")
 
-            # Use Azure Router (GPT-5)
+            # Use AI Service (GPT-5)
             model_name = self.deployment_name
 
             # Count input tokens (only count text for multimodal, approximate)
@@ -650,10 +650,10 @@ class IncidentProcessor:
                     input_text = f"{system_prompt}\n{enhanced_user_prompt}\n{user_content}"
                 input_tokens = self.count_tokens(input_text)
             
-            # Use Azure Router (GPT-5) for timing
+            # Use AI Service (GPT-5) for timing
             model_name = self.deployment_name
             
-            # Generate summary with timing using Azure Router (GPT-5)
+            # Generate summary with timing using AI Service (GPT-5)
             llm_start = time.monotonic()
             print(f"🤖 Starting LLM call with {model_name}...")
             
@@ -807,7 +807,7 @@ class IncidentProcessor:
         Generate team recommendations with prompt-specific pre-selection strategies.
 
         Strategies per prompt:
-        - customer_pending_facilitation: Focus on CxE Care, CSS teams
+        - customer_pending_facilitation: Focus on customer care/support teams
         - dev_pending_facilitation: Focus on SWE, Engineering teams
         - escalation: Use transfer reason analysis
         - article_search: Domain keyword matching
@@ -1401,7 +1401,7 @@ Respond in JSON format:
         """Analyze incident logs using filesystem MCP server."""
         try:
             # Find the incident folder
-            incident_folder = f"icms/{incident_number}"
+            incident_folder = f"incidents/{incident_number}"
             if not os.path.exists(incident_folder):
                 return {"error": f"Incident folder not found: {incident_folder}"}
             
@@ -1419,32 +1419,24 @@ Respond in JSON format:
             latest_date_folder = sorted(date_folders)[-1]
             logs_path = os.path.join(incident_folder, latest_date_folder)
             
-            # Find Client Analyzer output folder
-            client_analyzer_folders = []
+            # Find diagnostic tool output folder
+            diagnostic_tool_folders = []
             for item in os.listdir(logs_path):
                 item_path = os.path.join(logs_path, item)
                 if os.path.isdir(item_path) and 'output' in item.lower():
-                    client_analyzer_folders.append(item)
-            
-            if not client_analyzer_folders:
-                return {"error": f"No Client Analyzer output folders found in {logs_path}"}
-            
-            # Use the most recent Client Analyzer folder
-            latest_analyzer_folder = sorted(client_analyzer_folders)[-1]
+                    diagnostic_tool_folders.append(item)
+
+            if not diagnostic_tool_folders:
+                return {"error": f"No diagnostic tool output folders found in {logs_path}"}
+
+            # Use the most recent diagnostic tool output folder
+            latest_analyzer_folder = sorted(diagnostic_tool_folders)[-1]
             analyzer_path = os.path.join(logs_path, latest_analyzer_folder)
-            
-            # Analyze key log files
+
+            # Analyze key log files (configure via DIAGNOSTIC_LOG_FILES in .env)
             log_files_analysis = {}
-            key_files = [
-                'health.txt',
-                'config.txt',
-                'exclusions.txt',
-                'definitions.txt',
-                'log.txt',
-                'console.txt',
-                'syslog.txt'
-            ]
-            
+            key_files = config.diagnostic_log_files
+
             for log_file in key_files:
                 file_path = os.path.join(analyzer_path, log_file)
                 if os.path.exists(file_path):
@@ -1553,8 +1545,8 @@ Respond in JSON format:
         components = []
         content_lower = content.lower()
         
-        if 'mdatp' in content_lower or 'mde' in content_lower:
-            components.append('Microsoft Defender for Endpoint')
+        if config.security_agent_keywords and any(kw in content_lower for kw in config.security_agent_keywords):
+            components.append(config.security_agent_display_name)
         if 'jamf' in content_lower:
             components.append('JAMF Pro')
         if 'finder' in content_lower:
@@ -1609,10 +1601,10 @@ Respond in JSON format:
                     content_parts.append(f"\n{log_file}:")
                     content_parts.append(content[:1000] + "..." if len(content) > 1000 else content)
             
-            # Add MDE logs
-            if log_analysis.get('mde_logs'):
-                content_parts.append("\nMDE Logs:")
-                for log_file, content in log_analysis['mde_logs'].items():
+            # Add security agent logs
+            if log_analysis.get('security_agent_logs'):
+                content_parts.append(f"\n{config.security_agent_display_name} Logs:")
+                for log_file, content in log_analysis['security_agent_logs'].items():
                     content_parts.append(f"\n{log_file}:")
                     content_parts.append(content[:500] + "..." if len(content) > 500 else content)
             
@@ -1701,8 +1693,8 @@ Respond in JSON format:
             details.append('authentication reset required')
         if 'machines' in content_lower and any(num in content for num in ['300', '304', '100+', '200+']):
             details.append('large scale deployment')
-        if 'defender' in content_lower:
-            details.append('Microsoft Defender for Endpoint')
+        if config.security_agent_keywords and any(kw in content_lower for kw in config.security_agent_keywords):
+            details.append(config.security_agent_display_name)
         if 'macos' in content_lower or 'mac os' in content_lower:
             details.append('macOS platform')
         
@@ -1733,14 +1725,12 @@ Respond in JSON format:
         content_lower = content.lower()
         components = []
         
-        if 'defender' in content_lower:
-            components.append('Microsoft Defender')
+        if config.security_agent_keywords and any(kw in content_lower for kw in config.security_agent_keywords):
+            components.append(config.security_agent_display_name)
         if 'endpoint' in content_lower:
             components.append('Endpoint Protection')
-        if 'mde' in content_lower:
-            components.append('MDE')
         if 'sensor' in content_lower:
-            components.append('MDE Sensor')
+            components.append(f'{config.security_agent_display_name} Sensor')
         if 'agent' in content_lower:
             components.append('Security Agent')
         if 'authentication' in content_lower:
@@ -1786,16 +1776,14 @@ Respond in JSON format:
                     query_parts.append('Linux')
                 
                 # Extract component information
-                if 'defender' in summary.lower():
-                    query_parts.append('Microsoft Defender')
-                if 'mde' in summary.lower():
-                    query_parts.append('MDE')
+                if config.security_agent_keywords and any(kw in summary.lower() for kw in config.security_agent_keywords):
+                    query_parts.append(config.security_agent_display_name)
                 if 'endpoint' in summary.lower():
                     query_parts.append('Endpoint Protection')
-                
+
                 # Extract specific technical issues
-                if 'mau' in summary.lower() or 'microsoft autoupdate' in summary.lower():
-                    query_parts.append('Microsoft AutoUpdate')
+                if config.autoupdate_keywords and any(kw in summary.lower() for kw in config.autoupdate_keywords):
+                    query_parts.append(config.autoupdate_display_name)
                 if 'jamf' in summary.lower():
                     query_parts.append('JAMF')
                 if 'auto update' in summary.lower() or 'automatic update' in summary.lower():
@@ -1848,24 +1836,24 @@ Respond in JSON format:
                     
                     if 'macos' in content_lower:
                         query_terms.append('macOS')
-                    if 'defender' in content_lower:
-                        query_terms.append('Microsoft Defender')
+                    if config.security_agent_keywords and any(kw in content_lower for kw in config.security_agent_keywords):
+                        query_terms.append(config.security_agent_display_name)
                     if 'jwt' in content_lower or 'token' in content_lower:
                         query_terms.append('JWT token')
                     if 'authentication' in content_lower:
                         query_terms.append('authentication')
                     if 'communication' in content_lower:
                         query_terms.append('communication')
-                    
+
                     if query_terms:
                         return ' '.join(query_terms)
-            
+
             # Final fallback
-            return "Microsoft Defender Endpoint troubleshooting"
-            
+            return f"{config.security_agent_display_name} troubleshooting"
+
         except Exception as e:
             logger.warning(f"Error creating technical query: {e}")
-            return "Microsoft Defender Endpoint troubleshooting"
+            return f"{config.security_agent_display_name} troubleshooting"
 
     
     def process_multiple_incidents(self, combined_json_path, prompts, prompt_type, debug_api=False):
@@ -1935,7 +1923,7 @@ Respond in JSON format:
             
             operation_time = datetime.now().isoformat()
             
-            # Use Azure Router (GPT-5) for logging
+            # Use AI Service (GPT-5) for logging
             model_name = self.deployment_name
             
             # Save unified summary
@@ -2017,7 +2005,7 @@ Respond in JSON format:
             
             operation_time = datetime.now().isoformat()
             
-            # Use Azure Router (GPT-5) for logging
+            # Use AI Service (GPT-5) for logging
             model_name = self.deployment_name
             
             # Save troubleshooting plan
@@ -2088,9 +2076,9 @@ Respond in JSON format:
                     except Exception as e:
                         logger.warning(f"Error processing GitHub link: {e}")
             
-            # Research Microsoft Defender documentation
-            research_results["microsoft_docs"] = {
-                "device_control": "Microsoft Defender for Endpoint device control policies",
+            # Research vendor documentation for the configured security agent
+            research_results["vendor_docs"] = {
+                "device_control": f"{config.security_agent_display_name} device control policies",
                 "policy_samples": "Official policy samples and examples",
                 "troubleshooting": "Device control troubleshooting guides"
             }
@@ -2448,7 +2436,7 @@ def load_prompts(prompt_type="default"):
 def main():
     parser = argparse.ArgumentParser(description='Process and summarize incident data from a processed JSON file.')
     parser.add_argument('input_file', help='Path to the processed JSON file (must contain conversation and summary)')
-    # Always use Azure Router (GPT-5) - no model selection needed
+    # Always use AI Service (GPT-5) - no model selection needed
     parser.add_argument('--prompt-type', default='default', help='Type of prompt to use (customer_pending_facilitation, dev_pending_facilitation, escalation, mitigation, prev_act, article_search, create_prompt_for_logs_analyze, simplified_incident_explanation)')
     parser.add_argument('--debug', '-d', action='store_true', help='Print the body of the API request sent to the LLM for debugging.')
     parser.add_argument('--multi-incident', action='store_true', help='Process multiple incidents from a combined JSON file')
@@ -2470,8 +2458,8 @@ def main():
         def get_keyword_suggestion_prompt():
             return load_prompts("keyword_suggestion")
 
-        # Always use Azure Router (GPT-5)
-        use_azure_router = True
+        # Always use AI Service (GPT-5)
+        use_ai_service = True
         
         # Check AI Service credentials
         if not all([config.ai_service_api_key, config.ai_service_endpoint, 
@@ -2490,7 +2478,7 @@ def main():
         )
         
         # Log which model is being used
-        logger.info(f"Using Azure Router (GPT-5) with deployment: {processor.deployment_name}")
+        logger.info(f"Using AI Service (GPT-5) with deployment: {processor.deployment_name}")
 
         # Handle multi-incident processing
         if args.multi_incident:
@@ -2537,7 +2525,7 @@ def main():
             # Save article search results
             operation_time = datetime.now().isoformat()
             
-            # Use Azure Router (GPT-5) for logging
+            # Use AI Service (GPT-5) for logging
             model_name = processor.deployment_name
             
             # Save results
@@ -2652,7 +2640,7 @@ def main():
         
         operation_time = datetime.now().isoformat()
         
-        # Use Azure Router (GPT-5) for logging
+        # Use AI Service (GPT-5) for logging
         model_name = processor.deployment_name
             
         processor.save_to_json(

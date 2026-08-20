@@ -57,15 +57,15 @@ class Config:
         self.use_azure_ad = os.environ.get('USE_AZURE_AD', 'false').lower() == 'true'
         self.ai_resource_name = os.environ.get('AI_RESOURCE_NAME')
         
-        # Database Configuration (ICM)
+        # Database Configuration (Kusto)
         self.database_cluster = os.environ.get('DATABASE_CLUSTER', 'https://your-cluster.kusto.windows.net')
         self.database_name = os.environ.get('DATABASE_NAME', 'YourDatabase')
         self.database_token_scope = os.environ.get('DATABASE_TOKEN_SCOPE', 'https://your-cluster.kusto.windows.net/.default')
 
-        # Microsoft Defender Backend Configuration (for device telemetry like HeartbeatLog)
-        self.defender_cluster = os.environ.get('DEFENDER_CLUSTER', '')
-        self.defender_database = os.environ.get('DEFENDER_DATABASE', '')
-        self.defender_token_scope = os.environ.get('DEFENDER_TOKEN_SCOPE', '')
+        # Secondary Telemetry Backend Configuration (optional, e.g. for device/endpoint telemetry)
+        self.secondary_cluster = os.environ.get('SECONDARY_CLUSTER', '')
+        self.secondary_database = os.environ.get('SECONDARY_DATABASE', '')
+        self.secondary_token_scope = os.environ.get('SECONDARY_TOKEN_SCOPE', '')
         
         # Cost Configuration (for AI service)
         self.input_cost = float(os.environ.get('AI_SERVICE_INPUT_COST', '0.01'))  # Cost per 1K input tokens
@@ -84,7 +84,35 @@ class Config:
         self.azure_devops_org = os.environ.get('AZURE_DEVOPS_ORG')
         self.azure_devops_project = os.environ.get('AZURE_DEVOPS_PROJECT')
         self.azure_devops_pat = os.environ.get('AZURE_DEVOPS_PAT')
-        
+        self.azure_devops_default_assignee = os.environ.get('AZURE_DEVOPS_DEFAULT_ASSIGNEE', '')
+        self.azure_devops_custom_field1_value = os.environ.get('AZURE_DEVOPS_CUSTOM_FIELD1_VALUE', '')
+        # Optional: a known work item ID used to sniff the real custom field reference name.
+        # If unset, field reference detection falls back to trying common naming patterns.
+        self.azure_devops_reference_work_item_id = os.environ.get('AZURE_DEVOPS_REFERENCE_WORK_ITEM_ID', '')
+        # Custom field reference names for preventative action work items (process-template specific)
+        self.azure_devops_repair_type_field = os.environ.get('AZURE_DEVOPS_REPAIR_TYPE_FIELD', 'Custom.RepairItemType')
+        self.azure_devops_incident_ids_field = os.environ.get('AZURE_DEVOPS_INCIDENT_IDS_FIELD', 'Custom.IncidentIDs')
+        self.azure_devops_incident_count_field = os.environ.get('AZURE_DEVOPS_INCIDENT_COUNT_FIELD', 'Custom.IncidentCount')
+
+        # Optional noise filter for discussion entries from an automated/service account
+        # (e.g. a bot that posts boilerplate enrichment text you want excluded from analysis)
+        self.noise_filter_author = os.environ.get('NOISE_FILTER_AUTHOR', '')
+        self.noise_filter_content_prefix = os.environ.get('NOISE_FILTER_CONTENT_PREFIX', '')
+
+        # Optional: keywords used to detect security-agent-related content in incident text
+        # (comma-separated, lowercase, e.g. names/acronyms of the EDR/antivirus product you support).
+        # Leave unset to disable this tagging.
+        self.security_agent_keywords = [k.strip().lower() for k in os.environ.get('SECURITY_AGENT_KEYWORDS', '').split(',') if k.strip()]
+        self.security_agent_display_name = os.environ.get('SECURITY_AGENT_DISPLAY_NAME', 'Security Agent')
+
+        # Optional: keywords used to detect auto-update-related content in incident text
+        # (comma-separated, lowercase). Leave unset to disable this tagging.
+        self.autoupdate_keywords = [k.strip().lower() for k in os.environ.get('AUTOUPDATE_KEYWORDS', '').split(',') if k.strip()]
+        self.autoupdate_display_name = os.environ.get('AUTOUPDATE_DISPLAY_NAME', 'Auto-Update Service')
+
+        # Diagnostic tool output file names to analyze from incident log bundles (comma-separated)
+        self.diagnostic_log_files = [f.strip() for f in os.environ.get('DIAGNOSTIC_LOG_FILES', 'log.txt,console.txt,syslog.txt').split(',') if f.strip()]
+
         # Validate required configurations
         self._validate_config()
     

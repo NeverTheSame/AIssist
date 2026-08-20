@@ -20,7 +20,7 @@ This tool is built for support teams to handle technical incidents more efficien
 - **Screenshot Processing**: Automatically downloads and processes embedded screenshots from incident data
 - **Memory Integration**: Uses mem0 for persistent memory across sessions, learning from previous incidents
 - **Gap Analysis**: Compares incident troubleshooting against knowledge base articles to identify missing steps
-- **Azure Router Integration**: Uses Azure Router with GPT-5 for all AI operations
+- **AI Service Integration**: Uses AI Service with GPT-5 for all AI operations
 
 ## Architecture
 
@@ -32,7 +32,7 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
   - Persistent token caching for seamless authentication
   - Screenshot extraction and processing from embedded data URLs
   - Incident-specific folder organization
-  - Network error handling with VPN connection guidance
+  - Network error handling with connectivity guidance for network-restricted clusters
 - **Output**: CSV files with incident discussions and authored summaries
 
 ### Stage 2: Data Processing (`transformer.py`)
@@ -59,7 +59,7 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 ### Core Technologies
 - **Python 3.12**: Primary programming language with virtual environment support
 - **Azure Data Explorer (Kusto)**: Data source for incident information
-- **Azure Router**: Primary AI service for text generation and embeddings (GPT-5)
+- **AI Service**: Primary AI service for text generation and embeddings (GPT-5)
 
 ### AI and Machine Learning
 - **mem0**: Universal memory layer for AI agents providing persistent context
@@ -142,7 +142,7 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 ### Prerequisites
 - Python 3.12 or higher
 - Azure account with access to databases and AI services
-- VPN connection for accessing internal resources (if required)
+- VPN or private network access, if your Kusto cluster is network-restricted
 
 ### Installation
 
@@ -187,8 +187,8 @@ The system supports various prompt types for different analysis needs:
 
 ### Specialized Analysis
 - **`troubleshooting_gap_analysis`**: Compares incident steps against knowledge base
-- **`care_incident_facilitation`**: CARE team facilitation summaries
-- **`icm_delay_analysis`**: Identifies reasons for incident delays
+- **`customer_care_facilitation`**: Customer care team facilitation summaries
+- **`incident_delay_analysis`**: Identifies reasons for incident delays
 - **`create_prompt_for_logs_analyze`**: Creates tailored investigation prompts for log analysis
 
 ## Configuration
@@ -247,20 +247,20 @@ Create a `prompts.json` file with your prompt templates for different summarizat
 
 Create a `.env` file with the following variables:
 
-**Azure Router (Required):**
+**AI Service (Required):**
 ```
-AZURE_ROUTER_API_KEY=your_api_key
-AZURE_ROUTER_ENDPOINT=your_endpoint
-AZURE_ROUTER_API_VERSION=2024-02-15-preview
-AZURE_ROUTER_DEPLOYMENT_NAME=your_deployment_name
-AZURE_ROUTER_MODEL_NAME=gpt-5
+AI_SERVICE_API_KEY=your_api_key
+AI_SERVICE_ENDPOINT=your_endpoint
+AI_SERVICE_API_VERSION=2024-02-15-preview
+AI_SERVICE_DEPLOYMENT_NAME=your_deployment_name
+AI_SERVICE_MODEL_NAME=gpt-5
 ```
 
 **Azure Kusto (Required for data fetching):**
 ```
-AZURE_KUSTO_CLUSTER=https://your-cluster.kusto.windows.net
-AZURE_KUSTO_DATABASE=YourDatabase
-AZURE_KUSTO_TOKEN_SCOPE=https://your-cluster.kusto.windows.net/.default
+DATABASE_CLUSTER=https://your-cluster.kusto.windows.net
+DATABASE_NAME=YourDatabase
+DATABASE_TOKEN_SCOPE=https://your-cluster.kusto.windows.net/.default
 ```
 
 **Azure DevOps (Optional - for preventative actions workflow):**
@@ -268,6 +268,17 @@ AZURE_KUSTO_TOKEN_SCOPE=https://your-cluster.kusto.windows.net/.default
 AZURE_DEVOPS_ORG=your-organization
 AZURE_DEVOPS_PROJECT=your-project
 AZURE_DEVOPS_PAT=your-personal-access-token
+AZURE_DEVOPS_DEFAULT_ASSIGNEE=your-name
+AZURE_DEVOPS_CUSTOM_FIELD1_VALUE=your-custom-field-value
+AZURE_DEVOPS_REPAIR_TYPE_FIELD=Custom.RepairItemType
+AZURE_DEVOPS_INCIDENT_IDS_FIELD=Custom.IncidentIDs
+AZURE_DEVOPS_INCIDENT_COUNT_FIELD=Custom.IncidentCount
+```
+
+**Noise Filter (Optional - excludes boilerplate entries from a specific automated/service account):**
+```
+NOISE_FILTER_AUTHOR=service-account-name
+NOISE_FILTER_CONTENT_PREFIX=Boilerplate text prefix to match
 ```
 
 **Article Search (Optional - for article search mode):**
@@ -292,43 +303,43 @@ The `main.py` script handles the entire pipeline automatically:
 
 Fetch, process, and summarize an incident with interactive prompt selection:
 ```bash
-python main.py 654045297
+python main.py 100000001
 ```
 
 Fetch, process, and summarize an incident with specific escalation prompt:
 ```bash
-python main.py 654045297 --prompt-type escalation
+python main.py 100000001 --prompt-type escalation
 ```
 
-All operations use Azure Router (GPT-5) by default.
+All operations use AI Service (GPT-5) by default.
 
 Process multiple incidents with unified summarization:
 ```bash
-python main.py 654045297 654045298 654045299 --prompt-type escalation
+python main.py 100000001 654045298 654045299 --prompt-type escalation
 ```
 
 Generate troubleshooting plan based on historical incidents:
 ```bash
-python main.py 654045297 654045298 654045299 654045300 --troubleshooting-plan
+python main.py 100000001 654045298 654045299 654045300 --troubleshooting-plan
 ```
 
 Generate weekly insights for multiple incidents (CRI Weekly Insights):
 ```bash
 # Process multiple incidents from scratch
-python3 main.py 667536660 686775744 693453104 698309282 698781262 --prompt-type weekly_insights
+python3 main.py 100000005 100000006 100000007 100000008 100000009 --prompt-type weekly_insights
 
 # Process from existing combined JSON file
-python3 main.py --multi-incident --input-file processed_incidents/incident_combined_667536660_686775744_693453104_698309282_698781262.json --prompt-type weekly_insights
+python3 main.py --multi-incident --input-file processed_incidents/incident_combined_100000005_100000006_100000007_100000008_100000009.json --prompt-type weekly_insights
 ```
 
 Generate knowledge base article from incident data:
 ```bash
-python main.py 654045297 --prompt-type kb_article
+python main.py 100000001 --prompt-type kb_article
 ```
 
 Analyze incident for improvement opportunities:
 ```bash
-python main.py 654045297 --prompt-type improvement_analysis
+python main.py 100000001 --prompt-type improvement_analysis
 ```
 
 Fetch VIP customer incidents:
@@ -346,39 +357,39 @@ python3 fetch_vip_incidents.py
 #### 1. Test with Sample Incident
 ```bash
 # Test with a known incident number
-python3 main.py 692076095 --prompt-type escalation
+python3 main.py 100000004 --prompt-type escalation
 ```
 
 #### 2. Test Different Prompt Types
 ```bash
 # Test escalation summaries
-python3 main.py 692076095 --prompt-type escalation
+python3 main.py 100000004 --prompt-type escalation
 
 # Test mitigation reports  
-python3 main.py 692076095 --prompt-type mitigation
+python3 main.py 100000004 --prompt-type mitigation
 
 # Test troubleshooting guides
-python3 main.py 692076095 --prompt-type troubleshooting
+python3 main.py 100000004 --prompt-type troubleshooting
 ```
 
 #### 3. Test Article Search Functionality
 ```bash
 # Test article search mode (requires vector database)
-python3 main.py 692076095 --prompt-type article_search
+python3 main.py 100000004 --prompt-type article_search
 ```
 
 #### 4. Test Memory Integration
 ```bash
 # Process multiple incidents to test memory learning
-python3 main.py 692076095
-python3 main.py 692076095  # Second run should use memory context
+python3 main.py 100000004
+python3 main.py 100000004  # Second run should use memory context
 ```
 
 #### 5. Test Different Prompt Types
 ```bash
 # Test different prompt types
-python3 main.py 692076095 --prompt-type escalation
-python3 main.py 692076095 --prompt-type mitigation
+python3 main.py 100000004 --prompt-type escalation
+python3 main.py 100000004 --prompt-type mitigation
 ```
 
 ### Validation Steps
@@ -394,13 +405,13 @@ If you encounter issues, test these scenarios:
 
 ```bash
 # Test with debug mode for detailed output
-python3 main.py 692076095 --debug
+python3 main.py 100000004 --debug
 
 # Test with timing analysis
-python3 main.py 692076095 --timing
+python3 main.py 100000004 --timing
 
-# All operations use Azure Router (GPT-5)
-python3 main.py 692076095
+# All operations use AI Service (GPT-5)
+python3 main.py 100000004
 ```
 
 ### Advanced Usage
@@ -445,7 +456,7 @@ The gap analysis feature compares incident troubleshooting steps against compreh
 
 #### Available Options
 - `--prompt-type TYPE`   Type of prompt (customer_pending_facilitation, dev_pending_facilitation, escalation, mitigation, prev_act, article_search, create_prompt_for_logs_analyze, simplified_incident_explanation)
-- All operations use Azure Router (GPT-5) by default
+- All operations use AI Service (GPT-5) by default
 - `--debug`              Enable API debugging
 - `--articles-path PATH` Path to directory containing troubleshooting articles (for article search mode)
 - `--vector-db-path PATH` Path to vector database file (for article search mode)
@@ -464,17 +475,17 @@ You can also run each stage manually:
 
 **Stage 1: Fetch data from Kusto**
 ```bash
-python kusto_fetcher.py 654045297
+python kusto_fetcher.py 100000001
 ```
 
 **Stage 2: Process CSV to JSON**
 ```bash
-python transformer.py icms/654045297/654045297.csv
+python transformer.py incidents/100000001/100000001.csv
 ```
 
 **Stage 3: Generate AI insights**
 ```bash
-python processor.py processed_incidents/654045297.json --prompt-type escalation
+python processor.py processed_incidents/100000001.json --prompt-type escalation
 ```
 
 ### How It Works
@@ -484,7 +495,7 @@ The tool follows a three-stage pipeline:
 #### Stage 1: Data Fetching (`kusto_fetcher.py`)
 1. **Fetches incident data from Azure Kusto** using the incident number(s) and your `query.kql` template.
 2. **Caches the Azure authentication token** in `.kusto_token_cache.json` for reuse until it expires.
-3. **Creates incident-specific folders** (e.g., `icms/664099798/`) for each incident.
+3. **Creates incident-specific folders** (e.g., `incidents/100000002/`) for each incident.
 4. **Downloads embedded screenshots** from data URLs and saves them as image files.
 5. **Saves raw data** as CSV files in the incident folders.
 
@@ -495,7 +506,7 @@ The tool follows a three-stage pipeline:
 4. **Outputs structured JSON** files optimized for LLM processing.
 
 #### Stage 3: AI Analysis (`processor.py`)
-1. **For single incidents**: Processes and summarizes the incident using Azure Router (GPT-5).
+1. **For single incidents**: Processes and summarizes the incident using AI Service (GPT-5).
 2. **For multiple incidents**: Combines all incident data and generates a unified summary.
 3. **Outputs results** to the appropriate directories (`processed_incidents/`, `summaries/`).
 
@@ -523,12 +534,12 @@ The `weekly_insights` prompt is designed to create concise, actionable weekly st
 
 Process multiple incidents from scratch:
 ```bash
-python3 main.py 667536660 686775744 693453104 698309282 698781262 --prompt-type weekly_insights
+python3 main.py 100000005 100000006 100000007 100000008 100000009 --prompt-type weekly_insights
 ```
 
 Process from existing combined JSON file (when you already have processed incident data):
 ```bash
-python3 main.py --multi-incident --input-file processed_incidents/incident_combined_667536660_686775744_693453104_698309282_698781262.json --prompt-type weekly_insights
+python3 main.py --multi-incident --input-file processed_incidents/incident_combined_100000005_100000006_100000007_100000008_100000009.json --prompt-type weekly_insights
 ```
 
 **Output Format:**
@@ -540,18 +551,18 @@ Each incident includes:
 - Immediate next action with timeline
 
 Followed by:
-- **Summary**: Overall analysis with average active days and primary reasons these ICMs are still open
+- **Summary**: Overall analysis with average active days and primary reasons these incidents are still open
 
 **Example Output:**
 ```
-Incident #667536660 - macOS Defender Portal Duplicate Devices
-Status: Stable but unresolved; duplicates persist despite multiple cleanup PRs. Active for 230 days. Primary blocker is complex root cause involving backend and device state inconsistencies. Next: Await customer logs and backend team analysis; follow-up within 3 days.
+Incident #100000005 - Duplicate Device Records in Admin Portal
+Status: Stable but unresolved; duplicates persist despite multiple cleanup attempts. Active for 42 days. Primary blocker is a root cause involving backend and device state inconsistencies. Next: Await customer logs and backend team analysis; follow-up within 3 days.
 
-Incident #686775744 - macOS Device Connectivity Issue on XDR Portal
-Status: Stable; transient connectivity state occurs after sleep. Active for 47 days. Blocker is proxy reconnection delay and portal status update latency. Next: Device Health and Portal teams to confirm expected behavior; update by end of week.
+Incident #100000006 - Intermittent Connectivity After Sleep/Wake
+Status: Stable; transient connectivity state occurs after device sleep. Active for 18 days. Blocker is a reconnection delay and status update latency. Next: Platform team to confirm expected behavior; update by end of week.
 
 Summary:
-The open incidents have been active on average 57 days, with primary delays caused by multi-team coordination challenges, complex backend and client state issues, and configuration management complexities. Engineering teams are prioritizing targeted remediation actions with defined timelines.
+The open incidents have been active on average 30 days, with primary delays caused by multi-team coordination challenges, complex backend and client state issues, and configuration management complexities. Engineering teams are prioritizing targeted remediation actions with defined timelines.
 ```
 
 **Best Practices:**
@@ -721,26 +732,26 @@ Use this context to provide more informed and consistent analysis.
 After running the tool, you'll have the following structure:
 
 ```
-icms/
-├── 664099798/                    # Incident-specific folder
-│   ├── 664099798.csv            # Raw CSV data from Kusto
-│   ├── 664099798_summary_processed.txt  # Processed summary with screenshot references
-│   ├── screenshot_664099798_001.png     # Downloaded screenshots
-│   ├── screenshot_664099798_002.jpg
+incidents/
+├── 100000002/                    # Incident-specific folder
+│   ├── 100000002.csv            # Raw CSV data from Kusto
+│   ├── 100000002_summary_processed.txt  # Processed summary with screenshot references
+│   ├── screenshot_100000002_001.png     # Downloaded screenshots
+│   ├── screenshot_100000002_002.jpg
 │   └── ...
-├── 672325151/
-│   ├── 672325151.csv
+├── 100000003/
+│   ├── 100000003.csv
 │   └── ...
 └── ...
 
 processed_incidents/
-├── 664099798.json               # Structured JSON for LLM processing
-├── 672325151.json
+├── 100000002.json               # Structured JSON for LLM processing
+├── 100000003.json
 └── ...
 
 summaries/
-├── 664099798.json               # AI-generated summaries
-├── 672325151.json
+├── 100000002.json               # AI-generated summaries
+├── 100000003.json
 └── ...
 
 memory/                          # Memory storage (git-ignored)
@@ -759,7 +770,7 @@ memory/                          # Memory storage (git-ignored)
 - If you see OpenAI API key errors, ensure your `.env` is set up for Azure OpenAI (not regular OpenAI).
 - For Kusto query issues, check your `query.kql` template and Azure permissions.
 - If the interactive prompt menu doesn't appear, ensure `interactive_menu_prompts.json` exists and contains valid prompt types.
-- If `transformer.py` can't find CSV files, check that they're in the new incident-specific folders (e.g., `icms/664099798/664099798.csv`).
+- If `transformer.py` can't find CSV files, check that they're in the new incident-specific folders (e.g., `incidents/100000002/100000002.csv`).
 - For screenshot download issues, ensure the incident data contains valid data URLs and the output directories are writable.
 - **Memory Issues**: If memory isn't working, check that `memory_config.json` exists and `enabled` is set to `true`, or verify that the `--no-memory` flag is not being used.
 - **Vector Database Issues**: If you see "Using file-based memory system" instead of mem0, ensure `AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME` is set in your `.env` file. The vector database is stored in `~/.mem0/` and persists across sessions.
@@ -770,48 +781,31 @@ memory/                          # Memory storage (git-ignored)
 ## Project Structure
 
 ```
-Summarizer/
+AIssist/
 ├── main.py                     # Main entry point and orchestration
 ├── processor.py                # AI processing and summarization engine
 ├── transformer.py              # Data transformation and cleaning
-├── kusto_fetcher.py           # Azure Kusto data fetching
-├── memory/                    # Memory management system
-│   ├── memory_manager.py      # Memory integration with Qdrant
-│   ├── view_memories.py       # Memory viewing utilities
-│   └── examples/              # Memory usage examples
-├── team_knowledge/            # Team knowledge management system
-│   ├── team_knowledge_manager.py  # Team detection and analysis
-│   ├── teams_matcher.py       # Team pattern matching
-│   ├── TEAM_KNOWLEDGE_SYSTEM.md  # Team system documentation
-│   └── teams/                 # Team knowledge databases
-├── MCP-Proxy/                 # MCP proxy for VS Code integration
-│   ├── mcp-http-proxy.js      # HTTP proxy server
-│   ├── package.json           # Node.js dependencies
-│   └── README.md              # MCP proxy documentation
-├── vip_incidents/             # VIP customer incident tracking
-│   ├── fetch_vip_incidents.py # VIP incident fetcher
-│   └── README.md              # VIP incidents documentation
-├── Documentation/             # Comprehensive documentation
-│   ├── kusto-mcp-guide.md     # Kusto MCP integration guide
-│   ├── kusto-quick-ref.md     # Quick reference for Kusto
-│   ├── logs-analysis-protocol.md  # Log analysis procedures
-│   └── unified-mcp-complete-guide.md  # Complete MCP guide
-├── article_searcher.py        # Article search and vector operations
-├── azure_devops_client.py     # Azure DevOps API client for work items
-├── gap_analysis.py            # Advanced gap analysis functionality
-├── simple_gap_analysis.py     # Simplified gap analysis tool
-├── config.py                  # Configuration management
-├── prompts.json               # AI prompt templates
-├── interactive_menu_prompts.json  # Interactive menu configuration with emojis
-├── query.kql                  # Kusto query template
-├── requirements.txt           # Python dependencies
-├── AGENTS.md                  # Agent guidelines and rules
-├── icms/                      # Raw incident data (CSV files)
-├── processed_incidents/       # Processed JSON data
-├── summaries/                 # Generated summaries
-├── memory/                    # Memory storage files
-└── logs/                      # Application logs
+├── kusto_fetcher.py            # Azure Kusto data fetching
+├── article_searcher.py         # Article search and vector operations
+├── azure_devops_client.py      # Azure DevOps API client for work items
+├── azure_auth.py                # Azure authentication helpers
+├── config.py                    # Configuration management
+├── free_text_prompt_generator.py # Free-text prompt generation helper
+├── fetch_new_pa.py              # Preventative action fetch helper
+├── pa_triage_runner.py          # Preventative action triage runner
+├── timing_utils.py              # Timing/telemetry utilities
+├── requirements.txt             # Python dependencies
+├── query.kql                    # Kusto query template (create locally, not tracked)
+├── prompts.json                 # AI prompt templates (create locally, not tracked)
+├── interactive_menu_prompts.json  # Interactive menu config (create locally, not tracked)
+├── incidents/                   # Raw incident data (CSV files, git-ignored)
+├── processed_incidents/         # Processed JSON data (git-ignored)
+├── summaries/                   # Generated summaries (git-ignored)
+├── memory/                      # Memory storage (git-ignored)
+└── logs/                        # Application logs (git-ignored)
 ```
+
+Optional modules referenced elsewhere in this README (a team-knowledge system, an MCP proxy for VS Code, VIP-customer tracking, extended documentation) are not included in this public repository — build them yourself following the same patterns if you need them.
 
 ## Recent Improvements
 

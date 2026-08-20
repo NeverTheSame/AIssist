@@ -36,19 +36,19 @@ class ArticleSearcher:
     """
     
     def __init__(self, articles_path: Optional[str] = None, vector_db_path: Optional[str] = None, 
-                 use_azure_router: bool = True, articles_base_path: Optional[str] = None):
+                 use_ai_service: bool = True, articles_base_path: Optional[str] = None):
         """
         Initialize the AdvancedArticleSearcher.
         
         Args:
             articles_path: Path to directory containing text articles (deprecated, use vector_db_path)
             vector_db_path: Path to vector database (Qdrant DB path or JSON file)
-            use_azure_router: Use Azure Router for embeddings and LLM calls (always True)
+            use_ai_service: Use AI Service for embeddings and LLM calls (always True)
             articles_base_path: Base path to article files (for reading content)
         """
         self.articles_path = articles_path
         self.vector_db_path = vector_db_path or config.vector_db_path or config.default_vector_db_path
-        self.use_azure_router = use_azure_router
+        self.use_ai_service = use_ai_service
         # Get articles base path from config or use default
         self.articles_base_path = articles_base_path or config.articles_base_path
         
@@ -136,20 +136,20 @@ class ArticleSearcher:
             logger.warning(f"Failed to recompute embeddings locally: {e}")
 
     def _init_client(self):
-        """Initialize Azure Router client (GPT-5)."""
+        """Initialize AI Service client (GPT-5)."""
         try:
             self.client, _ = get_openai_client_with_auth(config)
             self.deployment_name = config.ai_service_deployment_name
-            logger.info("Initialized Azure Router client (GPT-5)")
+            logger.info("Initialized AI Service client (GPT-5)")
         except Exception as e:
-            logger.error(f"Failed to initialize Azure Router client: {e}")
+            logger.error(f"Failed to initialize AI Service client: {e}")
             raise
 
     def _init_embedding_client(self):
-        """Initialize embedding client (uses Azure Router)."""
+        """Initialize embedding client (uses AI Service)."""
         try:
             self.embedding_client, _ = get_openai_client_with_auth(config)
-            logger.info("Initialized embedding client with Azure Router")
+            logger.info("Initialized embedding client with AI Service")
         except Exception as e:
             logger.warning(f"Failed to initialize embedding client: {e}")
             self.embedding_client = None
@@ -479,7 +479,7 @@ class ArticleSearcher:
                         {"role": "user", "content": scoring_prompt}
                     ]
                 }
-                # Use Azure Router (GPT-5) parameters
+                # Use AI Service (GPT-5) parameters
                 params["max_completion_tokens"] = 200  # GPT-5 uses max_completion_tokens, increased to avoid truncation
                 # Note: GPT-5 doesn't support temperature parameter
                 
@@ -542,7 +542,7 @@ class ArticleSearcher:
                             {"role": "user", "content": comparison_prompt}
                         ]
                     }
-                    # Use Azure Router (GPT-5) parameters
+                    # Use AI Service (GPT-5) parameters
                     params["max_completion_tokens"] = 100  # GPT-5 uses max_completion_tokens
                     # Note: GPT-5 doesn't support temperature parameter
                     
@@ -584,7 +584,7 @@ class ArticleSearcher:
                         {"role": "user", "content": explanation_prompt}
                     ]
                 }
-                # Use Azure Router (GPT-5) parameters
+                # Use AI Service (GPT-5) parameters
                 params["max_completion_tokens"] = 300  # GPT-5 uses max_completion_tokens, increased for explanations
                 # Note: GPT-5 doesn't support temperature parameter
                 
@@ -671,7 +671,7 @@ class ArticleSearcher:
             # Add platform/component context if available
             if any(term in summary.lower() for term in ['linux','windows','debian','rhel','ubuntu','centos','redhat','macos']):
                 explanation += "Platform-specific troubleshooting guidance. "
-            if any(term in summary.lower() for term in ['defender','mde','endpoint','security','edr','av','antivirus']):
+            if any(term in summary.lower() for term in config.security_agent_keywords + ['endpoint','security','edr','av','antivirus']):
                 explanation += "Security product troubleshooting. "
             if any(term in summary.lower() for term in ['policy','configuration','deployment','onboarding','selinux','kernel']):
                 explanation += "Configuration and deployment guidance. "
@@ -970,7 +970,7 @@ Provide a clear, concise explanation of the relevance:
             return 0
     
     def _get_model_name(self) -> str:
-        """Get the Azure Router model name for LLM calls."""
+        """Get the AI Service model name for LLM calls."""
         if hasattr(self, 'deployment_name') and self.deployment_name:
             return self.deployment_name
         return config.ai_service_deployment_name

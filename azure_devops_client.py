@@ -6,6 +6,8 @@ import re
 from urllib.parse import quote
 from typing import Dict, List, Optional, Tuple
 
+from config import config
+
 logger = logging.getLogger(__name__)
 
 
@@ -156,19 +158,20 @@ class AzureDevOpsClient:
             logger.error(f"Error searching work items: {e}")
             return []
     
-    def get_active_preventative_actions(self, assigned_to: str, custom_field_value: str = "KK", max_results: int = 50) -> List[Dict]:
+    def get_active_preventative_actions(self, assigned_to: str, custom_field_value: str = "", max_results: int = 50) -> List[Dict]:
         """
         Query work items that are active preventative actions.
         Returns only work items of type "Task" assigned to the specified user where Custom field 1 equals the specified value.
-        
+
         Args:
-            assigned_to: Full name of the assignee (e.g., "Kirill Kuklin")
-            custom_field_value: Value to filter by in Custom field 1 (default: "KK")
+            assigned_to: Full name of the assignee
+            custom_field_value: Value to filter by in Custom field 1 (default: config.azure_devops_custom_field1_value)
             max_results: Maximum number of results to return
-            
+
         Returns:
             List of work item dictionaries with id, title, state, url, etc.
         """
+        custom_field_value = custom_field_value or config.azure_devops_custom_field1_value
         # Build WIQL query for active preventative actions
         # Type = Task, Assigned to specific user, Custom field 1 = specified value, State not in (Closed, Inactive, Resolved)
         safe_name = assigned_to.replace("'", "''")
@@ -185,34 +188,36 @@ class AzureDevOpsClient:
             "[Custom.CustomField 1]"
         ]
         
-        # First, try to get work item #19394 to see the actual field reference
+        # If a reference work item is configured, use it to sniff the actual field reference
         actual_field_ref = None
-        try:
-            test_work_item = self.get_work_item(19394)
-            if test_work_item and 'raw' in test_work_item:
-                fields = test_work_item['raw'].get('fields', {})
-                # Look for fields that have value "KK"
-                for field_name, field_value in fields.items():
-                    if isinstance(field_value, str) and field_value.strip() == "KK":
-                        actual_field_ref = field_name
-                        logger.info(f"Found custom field reference from work item 19394: {actual_field_ref} (value: '{field_value}')")
-                        break
-                
-                # If not found by exact value match, log all custom fields for debugging
-                if not actual_field_ref:
-                    logger.debug("Field with value 'KK' not found. Searching all custom fields:")
+        reference_work_item_id = config.azure_devops_reference_work_item_id
+        if reference_work_item_id:
+            try:
+                test_work_item = self.get_work_item(int(reference_work_item_id))
+                if test_work_item and 'raw' in test_work_item:
+                    fields = test_work_item['raw'].get('fields', {})
+                    # Look for fields whose value matches the configured custom field value
                     for field_name, field_value in fields.items():
-                        if "Custom" in field_name or "custom" in field_name.lower():
-                            logger.debug(f"  {field_name} = '{field_value}' (type: {type(field_value).__name__})")
-                            if isinstance(field_value, str) and field_value.strip() == "KK":
-                                actual_field_ref = field_name
-                                logger.info(f"Found custom field reference by name pattern: {actual_field_ref} (value: '{field_value}')")
-                                break
-        except Exception as e:
-            logger.warning(f"Could not fetch work item 19394 to determine field reference: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
-        
+                        if isinstance(field_value, str) and field_value.strip() == safe_value:
+                            actual_field_ref = field_name
+                            logger.info(f"Found custom field reference from reference work item: {actual_field_ref} (value: '{field_value}')")
+                            break
+
+                    # If not found by exact value match, log all custom fields for debugging
+                    if not actual_field_ref:
+                        logger.debug(f"Field with value '{safe_value}' not found. Searching all custom fields:")
+                        for field_name, field_value in fields.items():
+                            if "Custom" in field_name or "custom" in field_name.lower():
+                                logger.debug(f"  {field_name} = '{field_value}' (type: {type(field_value).__name__})")
+                                if isinstance(field_value, str) and field_value.strip() == safe_value:
+                                    actual_field_ref = field_name
+                                    logger.info(f"Found custom field reference by name pattern: {actual_field_ref} (value: '{field_value}')")
+                                    break
+            except Exception as e:
+                logger.warning(f"Could not fetch reference work item to determine field reference: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+
         # Use the found field reference, or try common patterns
         if actual_field_ref:
             # The field reference name from API is already the correct format (e.g., "Custom.CustomField1")
@@ -221,7 +226,7 @@ class AzureDevOpsClient:
         else:
             # Default to first pattern if we couldn't find it
             field_ref = field_references[0]
-            logger.warning(f"Could not determine custom field reference from work item 19394, will try patterns: {field_references}")
+            logger.warning(f"Could not determine custom field reference, will try patterns: {field_references}")
         
         wiql_query = f"SELECT [System.Id], [System.Title], [System.State] FROM WorkItems WHERE "
         wiql_query += f"[System.TeamProject] = '{self.project}'"
@@ -319,23 +324,23 @@ class AzureDevOpsClient:
                     for item in all_items:
                         fields = item.get('fields', {})
                         # Try to find custom fields with common reference name patterns
-                        icm_incident_count = None
-                        icm_incident_ids = None
-                        icm_repair_item_type = None
-                        
+                        related_incident_count = None
+                        related_incident_ids = None
+                        repair_item_type = None
+
                         # Look for custom fields - check all fields and match by keywords
                         for field_name, field_value in fields.items():
                             field_name_lower = field_name.lower()
-                            # Match IcM Incident Count - look for fields containing "icm", "incident", and "count"
-                            if 'icm' in field_name_lower and 'incident' in field_name_lower and 'count' in field_name_lower:
-                                icm_incident_count = field_value
-                            # Match IcM Incident IDs - look for fields containing "icm", "incident", and "id" or "ids"
-                            elif 'icm' in field_name_lower and 'incident' in field_name_lower and ('id' in field_name_lower or 'ids' in field_name_lower):
-                                icm_incident_ids = field_value
-                            # Match IcM Repair Item Type - look for fields containing "icm", "repair", and "type"
-                            elif 'icm' in field_name_lower and 'repair' in field_name_lower and 'type' in field_name_lower:
-                                icm_repair_item_type = field_value
-                        
+                            # Match incident count fields
+                            if 'incident' in field_name_lower and 'count' in field_name_lower:
+                                related_incident_count = field_value
+                            # Match incident ID/IDs fields
+                            elif 'incident' in field_name_lower and ('id' in field_name_lower or 'ids' in field_name_lower):
+                                related_incident_ids = field_value
+                            # Match repair item type fields
+                            elif 'repair' in field_name_lower and 'type' in field_name_lower:
+                                repair_item_type = field_value
+
                         work_items.append({
                             'id': item.get('id'),
                             'title': fields.get('System.Title', ''),
@@ -344,9 +349,9 @@ class AzureDevOpsClient:
                             'state': fields.get('System.State', ''),
                             'assigned_to': fields.get('System.AssignedTo', {}).get('displayName', '') if isinstance(fields.get('System.AssignedTo'), dict) else str(fields.get('System.AssignedTo', '')),
                             'url': item.get('url', '').replace('/_apis/wit/workitems', '/_workitems/edit'),
-                            'icm_incident_count': icm_incident_count,
-                            'icm_incident_ids': icm_incident_ids,
-                            'icm_repair_item_type': icm_repair_item_type
+                            'related_incident_count': related_incident_count,
+                            'related_incident_ids': related_incident_ids,
+                            'repair_item_type': repair_item_type
                         })
             
             logger.info(f"Found {len(work_items)} active preventative actions assigned to '{assigned_to}'")
@@ -583,71 +588,75 @@ REASONING: [brief explanation]"""
         
         return text
     
-    def create_preventative_action_work_item(self, title: str, icm_repair_item_type: str, incident_id: str, description: str = "", assigned_to: str = "Kirill Kuklin") -> Optional[int]:
+    def create_preventative_action_work_item(self, title: str, repair_item_type: str, incident_id: str, description: str = "", assigned_to: str = "") -> Optional[int]:
         """
         Create a new preventative action work item with required fields.
-        
+
         Args:
             title: Work item title
-            icm_repair_item_type: Value for IcM Repair Item Type field
-            incident_id: Incident ID to add to IcM Incident IDs
+            repair_item_type: Value for the repair item type custom field
+            incident_id: Incident ID to add to the incident IDs custom field
             description: Optional work item description (will be converted to plain text)
-            assigned_to: User to assign the work item to (default: "Kirill Kuklin")
-            
+            assigned_to: User to assign the work item to (default: config.azure_devops_default_assignee)
+
         Returns:
             Created work item ID, or None if creation failed
         """
-        # Use common field reference patterns (Azure DevOps custom fields typically follow these patterns)
-        # These will be tried in order, and if one fails, we'll get an error message
+        assigned_to = assigned_to or config.azure_devops_default_assignee
+
+        # Custom field reference names are process-template specific; configure via .env
         custom_field1_ref = "Custom.CustomField1"  # Common pattern for "Custom field 1"
-        icm_repair_type_ref = "Custom.IcMRepairItemType"  # Common pattern
-        icm_incident_ids_ref = "Custom.IcMIncidentIDs"  # Common pattern
-        icm_incident_count_ref = "Custom.IcMIncidentCount"  # Common pattern
-        
+        repair_type_ref = config.azure_devops_repair_type_field
+        incident_ids_ref = config.azure_devops_incident_ids_field
+        incident_count_ref = config.azure_devops_incident_count_field
+
         # Convert description to plain text (remove markdown)
         plain_text_description = self._strip_markdown(description) if description else ""
-        
+
         # Use JSON Patch format to create work item
         patch_operations = [
             {
                 "op": "add",
                 "path": "/fields/System.Title",
                 "value": title
-            },
-            {
+            }
+        ]
+
+        if assigned_to:
+            patch_operations.append({
                 "op": "add",
                 "path": "/fields/System.AssignedTo",
                 "value": assigned_to
-            }
-        ]
-        
+            })
+
         if plain_text_description:
             patch_operations.append({
                 "op": "add",
                 "path": "/fields/System.Description",
                 "value": plain_text_description
             })
-        
+
         # Add custom fields
+        if config.azure_devops_custom_field1_value:
+            patch_operations.append({
+                "op": "add",
+                "path": f"/fields/{custom_field1_ref}",
+                "value": config.azure_devops_custom_field1_value
+            })
         patch_operations.extend([
             {
                 "op": "add",
-                "path": f"/fields/{custom_field1_ref}",
-                "value": "KK"
+                "path": f"/fields/{repair_type_ref}",
+                "value": repair_item_type
             },
             {
                 "op": "add",
-                "path": f"/fields/{icm_repair_type_ref}",
-                "value": icm_repair_item_type
-            },
-            {
-                "op": "add",
-                "path": f"/fields/{icm_incident_ids_ref}",
+                "path": f"/fields/{incident_ids_ref}",
                 "value": incident_id
             },
             {
                 "op": "add",
-                "path": f"/fields/{icm_incident_count_ref}",
+                "path": f"/fields/{incident_count_ref}",
                 "value": 1
             }
         ])
@@ -669,12 +678,12 @@ REASONING: [brief explanation]"""
     
     def update_work_item_with_incident(self, work_item_id: int, incident_id: str) -> bool:
         """
-        Update an existing work item to add incident ID to IcM Incident IDs and increment IcM Incident Count.
-        
+        Update an existing work item to add an incident ID and increment the related incident count.
+
         Args:
             work_item_id: Work item ID to update
             incident_id: Incident ID to add
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -683,36 +692,36 @@ REASONING: [brief explanation]"""
         if not work_item or 'raw' not in work_item:
             logger.error(f"Could not retrieve work item {work_item_id}")
             return False
-        
+
         fields = work_item['raw'].get('fields', {})
-        
+
         # Find field reference names - use the same logic as in get_active_preventative_actions
-        icm_incident_ids_ref = None
-        icm_incident_count_ref = None
-        
+        incident_ids_ref = None
+        incident_count_ref = None
+
         for field_name, field_value in fields.items():
             field_name_lower = field_name.lower()
-            # Match IcM Incident IDs - look for fields containing "icm", "incident", and "id"/"ids" but NOT "count"
-            if 'icm' in field_name_lower and 'incident' in field_name_lower and ('id' in field_name_lower or 'ids' in field_name_lower) and 'count' not in field_name_lower:
-                if icm_incident_ids_ref is None:  # Take the first match
-                    icm_incident_ids_ref = field_name
-                    logger.debug(f"Found IcM Incident IDs field: {field_name} = {field_value}")
-            # Match IcM Incident Count - look for fields containing "icm", "incident", and "count"
-            elif 'icm' in field_name_lower and 'incident' in field_name_lower and 'count' in field_name_lower:
-                if icm_incident_count_ref is None:  # Take the first match
-                    icm_incident_count_ref = field_name
-                    logger.debug(f"Found IcM Incident Count field: {field_name} = {field_value}")
-        
-        if not icm_incident_ids_ref or not icm_incident_count_ref:
+            # Match incident IDs field - contains "incident" and "id"/"ids" but NOT "count"
+            if 'incident' in field_name_lower and ('id' in field_name_lower or 'ids' in field_name_lower) and 'count' not in field_name_lower:
+                if incident_ids_ref is None:  # Take the first match
+                    incident_ids_ref = field_name
+                    logger.debug(f"Found incident IDs field: {field_name} = {field_value}")
+            # Match incident count field - contains "incident" and "count"
+            elif 'incident' in field_name_lower and 'count' in field_name_lower:
+                if incident_count_ref is None:  # Take the first match
+                    incident_count_ref = field_name
+                    logger.debug(f"Found incident count field: {field_name} = {field_value}")
+
+        if not incident_ids_ref or not incident_count_ref:
             # Log all custom fields for debugging
-            custom_fields = {k: v for k, v in fields.items() if 'custom' in k.lower() or 'icm' in k.lower()}
+            custom_fields = {k: v for k, v in fields.items() if 'custom' in k.lower() or 'incident' in k.lower()}
             logger.error(f"Could not find required custom fields in work item {work_item_id}")
-            logger.debug(f"Available custom/ICM fields: {list(custom_fields.keys())}")
+            logger.debug(f"Available custom/incident fields: {list(custom_fields.keys())}")
             return False
-        
+
         # Get current values
-        current_ids = fields.get(icm_incident_ids_ref, "")
-        current_count = fields.get(icm_incident_count_ref, 0)
+        current_ids = fields.get(incident_ids_ref, "")
+        current_count = fields.get(incident_count_ref, 0)
         
         # Parse current IDs (might be comma-separated string)
         if isinstance(current_ids, str):
@@ -737,12 +746,12 @@ REASONING: [brief explanation]"""
         patch_operations = [
             {
                 "op": "replace",
-                "path": f"/fields/{icm_incident_ids_ref}",
+                "path": f"/fields/{incident_ids_ref}",
                 "value": new_ids
             },
             {
                 "op": "replace",
-                "path": f"/fields/{icm_incident_count_ref}",
+                "path": f"/fields/{incident_count_ref}",
                 "value": new_count
             }
         ]

@@ -216,7 +216,7 @@ def fetch_incident_data(incident_number):
     
     with time_context("kusto_subprocess", "fetch", {"incident_number": incident_number}):
         fetch_proc = subprocess.run([
-            sys.executable, "kusto_fetcher.py", str(incident_number), "--output-dir", "icms"
+            sys.executable, "kusto_fetcher.py", str(incident_number), "--output-dir", "incidents"
         ], capture_output=True, text=True)
     
     if fetch_proc.returncode != 0:
@@ -253,10 +253,10 @@ def fetch_incident_data(incident_number):
 
     # Check if the CSV file is empty or only contains the placeholder line
     # Try the new incident-specific folder structure first, then fall back to flat structure
-    csv_path = os.path.join("icms", str(incident_number), f"{incident_number}.csv")
+    csv_path = os.path.join("incidents", str(incident_number), f"{incident_number}.csv")
     if not os.path.exists(csv_path):
         # Fall back to flat structure for backward compatibility
-        csv_path = os.path.join("icms", f"{incident_number}.csv")
+        csv_path = os.path.join("incidents", f"{incident_number}.csv")
     logger.info(f"Checking CSV file: {csv_path}")
     
     is_empty = False
@@ -328,10 +328,10 @@ def process_incident_to_json(incident_number):
     print(f"Processing CSV to JSON for incident {incident_number}...")
     
     # Try the new incident-specific folder structure first, then fall back to flat structure
-    csv_path = os.path.join("icms", str(incident_number), f"{incident_number}.csv")
+    csv_path = os.path.join("incidents", str(incident_number), f"{incident_number}.csv")
     if not os.path.exists(csv_path):
         # Fall back to flat structure for backward compatibility
-        csv_path = os.path.join("icms", f"{incident_number}.csv")
+        csv_path = os.path.join("incidents", f"{incident_number}.csv")
     logger.info(f"Processing CSV file: {csv_path}")
     
     try:
@@ -1041,8 +1041,12 @@ def _interactive_preventative_action_dialog(incident_id: str, analysis_text: str
                 project=config.azure_devops_project,
                 pat=config.azure_devops_pat
             )
-            # Query for work items assigned to Kirill Kuklin where Custom field 1 = "KK"
-            active_work_items = ado_client.get_active_preventative_actions(assigned_to="Kirill Kuklin", custom_field_value="KK", max_results=50)
+            # Query for work items assigned to the configured default assignee, filtered by the configured custom field value
+            active_work_items = ado_client.get_active_preventative_actions(
+                assigned_to=config.azure_devops_default_assignee,
+                custom_field_value=config.azure_devops_custom_field1_value,
+                max_results=50
+            )
         else:
             print("⚠️  Azure DevOps PAT not configured, skipping Azure DevOps query")
             return
@@ -1063,15 +1067,15 @@ def _interactive_preventative_action_dialog(incident_id: str, analysis_text: str
             print(f"   Title: {work_item.get('title', 'No title')}")
             print(f"   State: {work_item.get('state', 'Unknown')}")
             # Display custom fields
-            icm_count = work_item.get('icm_incident_count')
-            if icm_count is not None:
-                print(f"   IcM Incident Count: {icm_count}")
-            icm_ids = work_item.get('icm_incident_ids')
-            if icm_ids:
-                print(f"   IcM Incident IDs: {icm_ids}")
-            icm_type = work_item.get('icm_repair_item_type')
-            if icm_type:
-                print(f"   IcM Repair Item Type: {icm_type}")
+            related_count = work_item.get('related_incident_count')
+            if related_count is not None:
+                print(f"   Related Incident Count: {related_count}")
+            related_ids = work_item.get('related_incident_ids')
+            if related_ids:
+                print(f"   Related Incident IDs: {related_ids}")
+            repair_type = work_item.get('repair_item_type')
+            if repair_type:
+                print(f"   Repair Item Type: {repair_type}")
     
     if active_work_items:
         total_count = len(active_work_items)
@@ -1100,17 +1104,17 @@ def _interactive_preventative_action_dialog(incident_id: str, analysis_text: str
         print("❌ Title is required")
         return
     
-    # Ask for IcM Repair Item Type
-    print("\nCommon IcM Repair Item Types: Product Improvement, Process Enablement, TSG, Public Documentation, Technical Enablement, Diagnostic Tools, SHS Alchemy")
-    icm_type_input = input("Enter IcM Repair Item Type: ").strip()
-    if not icm_type_input:
-        print("❌ IcM Repair Item Type is required")
+    # Ask for Repair Item Type
+    print("\nCommon Repair Item Types: Product Improvement, Process Enablement, Documentation, Technical Enablement, Diagnostic Tools")
+    repair_type_input = input("Enter Repair Item Type: ").strip()
+    if not repair_type_input:
+        print("❌ Repair Item Type is required")
         return
-    
+
     # Create the work item
     work_item_id = ado_client.create_preventative_action_work_item(
         title=title_input,
-        icm_repair_item_type=icm_type_input,
+        repair_item_type=repair_type_input,
         incident_id=incident_id,
         description=analysis_text
     )

@@ -361,7 +361,7 @@ def _execute_query_with_retry(client, database, query, incident_number, max_retr
     # All retries exhausted
     raise Exception(f"Query execution failed after {max_retries} attempts. Last error: {last_error}")
 
-def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="icms"):
+def fetch_incident_to_csv(incident_number, kql_template_path, output_dir="incidents"):
     """
     Fetch incident details from Azure Data Explorer and save as CSV in incident-specific folder.
     Args:
@@ -497,7 +497,7 @@ def main():
     parser.add_argument('incident_number', help='The incident number to fetch')
     parser.add_argument('--kql-template', default='query.kql', 
                        help='Path to KQL query template')
-    parser.add_argument('--output-dir', default='icms',
+    parser.add_argument('--output-dir', default='incidents',
                        help='Directory to save CSV files')
     args = parser.parse_args()
     print(f"[kusto_fetcher] Args: {args}")

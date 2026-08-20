@@ -186,10 +186,12 @@ def dump_discussion_items_to_json(discussion_items, incident_number, output_dir=
         # Get author information
         author = discussion_item.get('ChangedBy') or discussion_item.get('author')
 
-        # Filter out unwanted entries
-        # Skip entries with author "gautosvc" and content starting with "Support ICM enrichment CEM MDE"
-        if author == "gautosvc" and clean_content.startswith("Support ICM enrichment CEM MDE"):
-            logger.info(f"Filtering out gautosvc entry with Support ICM enrichment content")
+        # Filter out unwanted entries from an automated/service account, if configured
+        # (see NOISE_FILTER_AUTHOR / NOISE_FILTER_CONTENT_PREFIX in .env)
+        if (config.noise_filter_author and config.noise_filter_content_prefix and
+                author == config.noise_filter_author and
+                clean_content.startswith(config.noise_filter_content_prefix)):
+            logger.info(f"Filtering out automated noise entry from '{author}'")
             filtered_count += 1
             continue
 
@@ -402,13 +404,13 @@ def extract_images_from_docx(docx_path):
 
 def extract_summary_from_docx_text(docx_text):
     """
-    Use Azure Router (GPT-5) to extract the Authored Summary from docx text.
+    Use AI Service (GPT-5) to extract the Authored Summary from docx text.
     The LLM will identify and extract the summary content.
     """
     try:
-        logger.info("Initializing Azure Router client for summary extraction")
+        logger.info("Initializing AI Service client for summary extraction")
 
-        # Initialize Azure OpenAI client (Azure Router)
+        # Initialize Azure OpenAI client (AI Service)
         client, _ = get_openai_client_with_auth(config)
         
         # Create prompt for LLM to extract ALL content from manual docx (verbatim content extraction)
@@ -429,7 +431,7 @@ def extract_summary_from_docx_text(docx_text):
             print("⚠️  manual.docx appears empty. Populate it with the Authored Summary and retry.")
             return None
 
-        logger.info("Calling Azure Router to extract summary from docx text")
+        logger.info("Calling AI Service to extract summary from docx text")
         print("Processing document with LLM to extract all manual.docx content...")
         # Show a preview of the LLM request (system + user prompt)
         sys_preview = system_prompt[:600].replace('\n', ' ').replace('\r', ' ')
@@ -437,7 +439,7 @@ def extract_summary_from_docx_text(docx_text):
         print(f"[transformer] LLM system prompt preview: {sys_preview}")
         print(f"[transformer] LLM user prompt preview: {usr_preview}")
         
-        # Call Azure Router
+        # Call AI Service
         # For Azure OpenAI, pass the deployment name via the 'model' parameter
         response = client.chat.completions.create(
             model=config.ai_service_deployment_name,
@@ -473,7 +475,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Process and dump incident data to JSON format.')
-    parser.add_argument('file_path', help='Path to the CSV file (e.g., icms/12345/12345.csv or icms/12345.csv)')
+    parser.add_argument('file_path', help='Path to the CSV file (e.g., incidents/12345/12345.csv or incidents/12345.csv)')
     parser.add_argument('--output-dir', default='processed_incidents', 
                       help='Directory to store processed incident files')
     args = parser.parse_args()
@@ -587,7 +589,7 @@ def main():
         print(f"\nProcessed incident data has been saved to: {output_file}")
         print(f"Total entries processed: {len(discussion_items)}")
         if filtered_count > 0:
-            print(f"Filtered out {filtered_count} gautosvc entries with Support ICM enrichment content")
+            print(f"Filtered out {filtered_count} automated noise entries")
         if summary_content:
             print("Authored summary content has been cleaned and included in the JSON file")
         
