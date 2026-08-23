@@ -1,0 +1,60 @@
+{
+  "incident_id": "SYN-1003",
+  "total_entries": 2,
+  "conversation": [
+    {
+      "timestamp": "2026-01-07T14:00:00Z",
+      "author": "customer",
+      "content": "This is Ravi Kumar from Fabrikam Inc in Seattle. You can reach me at +1-206-555-0173 or ravi.kumar@fabrikam.com."
+    },
+    {
+      "timestamp": "2026-01-07T14:15:00Z",
+      "author": "customer",
+      "content": "The failed charge was on card 4111 1111 1111 1111 -- please confirm nothing else was charged."
+    }
+  ],
+  "spans": [
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 8,
+      "end": 18,
+      "entity_type": "PERSON"
+    },
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 24,
+      "end": 36,
+      "entity_type": "ORG"
+    },
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 40,
+      "end": 47,
+      "entity_type": "LOCATION"
+    },
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 69,
+      "end": 84,
+      "entity_type": "PHONE_NUMBER"
+    },
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 88,
+      "end": 111,
+      "entity_type": "EMAIL"
+    },
+    {
+      "entry_index": 1,
+      "field": "content",
+      "start": 30,
+      "end": 49,
+      "entity_type": "CREDIT_CARD"
+    }
+  ]
+}

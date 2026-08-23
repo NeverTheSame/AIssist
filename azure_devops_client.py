@@ -7,6 +7,7 @@ from urllib.parse import quote
 from typing import Dict, List, Optional, Tuple
 
 from config import config
+import guard
 
 logger = logging.getLogger(__name__)
 
@@ -603,6 +604,22 @@ REASONING: [brief explanation]"""
             Created work item ID, or None if creation failed
         """
         assigned_to = assigned_to or config.azure_devops_default_assignee
+
+        guard_settings = guard.load_settings()
+        if guard_settings.enabled:
+            validation = guard.validate_work_item(
+                repair_item_type=repair_item_type,
+                description=description,
+                assigned_to=assigned_to,
+            )
+            for warning in validation.warnings:
+                logger.warning(f"guard: {warning}")
+            if not validation.ok:
+                if guard_settings.injection_block_enabled:
+                    logger.error(f"guard: blocked preventative action work item creation: {validation.errors}")
+                    return None
+                for error in validation.errors:
+                    logger.warning(f"guard (not blocking; GUARD_INJECTION_BLOCK_ENABLED is off): {error}")
 
         # Custom field reference names are process-template specific; configure via .env
         custom_field1_ref = "Custom.CustomField1"  # Common pattern for "Custom field 1"

@@ -10,6 +10,7 @@ from docx import Document
 from openai import AzureOpenAI
 from config import config
 from azure_auth import get_openai_client_with_auth
+import guard
 
 # Configure logging
 def setup_logging():
@@ -38,7 +39,9 @@ def setup_logging():
     console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
     logger.addHandler(console_handler)
-    
+
+    guard.install_log_redaction([file_handler, console_handler])
+
     return logger
 
 logger = setup_logging()

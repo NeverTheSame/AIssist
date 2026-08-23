@@ -1,4 +1,5 @@
 import os
+import warnings
 from pathlib import Path
 
 class Config:
@@ -13,14 +14,28 @@ class Config:
         self._init_config()
     
     def _load_env(self):
-        """Load environment variables from .env file."""
+        """Load environment variables from .env file.
+
+        Falls back to .env.example's placeholder values (with a warning)
+        when .env is absent, so the repo stays importable for tests/CI and
+        runnable out of the box for anyone who clones it without secrets.
+        """
         env_path = self.root_dir / '.env'
         if not env_path.exists():
-            raise FileNotFoundError(
-                f".env file not found at {env_path}. "
-                "Please create a .env file with your configuration."
+            example_path = self.root_dir / '.env.example'
+            if not example_path.exists():
+                raise FileNotFoundError(
+                    f".env file not found at {env_path}, and no .env.example "
+                    "to fall back to. Please create a .env file with your configuration."
+                )
+            warnings.warn(
+                f".env file not found at {env_path}; falling back to placeholder "
+                f"values from {example_path}. AI/Kusto/DevOps calls will fail until "
+                "you create a real .env.",
+                stacklevel=3,
             )
-        
+            env_path = example_path
+
         # Read and parse .env file
         with open(env_path, 'r') as f:
             for line in f:

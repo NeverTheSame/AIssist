@@ -1,0 +1,13 @@
+{
+  "_comment": "Committed regression floor for benchmarks/run_redaction_benchmark.py's overall precision/recall/F1 per tier. benchmarks/check_thresholds.py fails CI if results.json drops below any of these. Update deliberately (with a comment in the PR explaining why) when the corpus or detectors change on purpose -- a silent drop here is exactly the regression this exists to catch.",
+  "regex": {
+    "precision": 0.9,
+    "recall": 0.55,
+    "f1": 0.65
+  },
+  "regex+presidio": {
+    "precision": 0.85,
+    "recall": 0.85,
+    "f1": 0.85
+  }
+}

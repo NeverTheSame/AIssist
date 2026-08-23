@@ -1,0 +1,44 @@
+{
+  "incident_id": "SYN-1002",
+  "total_entries": 3,
+  "conversation": [
+    {
+      "timestamp": "2026-01-06T09:00:00Z",
+      "author": "customer",
+      "content": "Getting 401s. Here's the header we send: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U."
+    },
+    {
+      "timestamp": "2026-01-06T09:10:00Z",
+      "author": "support",
+      "content": "Also please rotate the storage key in this connection string: DefaultEndpointsProtocol=https;AccountName=contosoacct;AccountKey=abcdEFGH1234567890abcdEFGH1234567890abcdEFGH12==;EndpointSuffix=core.windows.net -- treat it as compromised."
+    },
+    {
+      "timestamp": "2026-01-06T09:20:00Z",
+      "author": "support",
+      "content": "The blob SAS we handed out also needs revoking: https://contosoacct.blob.core.windows.net/logs/incident.zip?sv=2022-11-02&ss=b&srt=sco&sp=rwdlacx&se=2026-02-01T00:00:00Z&sig=abc123XYZdef456UVWghi789."
+    }
+  ],
+  "spans": [
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 56,
+      "end": 155,
+      "entity_type": "BEARER_TOKEN"
+    },
+    {
+      "entry_index": 1,
+      "field": "content",
+      "start": 62,
+      "end": 208,
+      "entity_type": "CONNECTION_STRING"
+    },
+    {
+      "entry_index": 2,
+      "field": "content",
+      "start": 48,
+      "end": 198,
+      "entity_type": "SAS_TOKEN"
+    }
+  ]
+}

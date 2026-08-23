@@ -1,0 +1,27 @@
+{
+  "incident_id": "SYN-1004",
+  "total_entries": 1,
+  "conversation": [
+    {
+      "timestamp": "2026-01-08T11:00:00Z",
+      "author": "engineer",
+      "content": "Rotating the deploy key. New private key material:\n-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK3f9GZ1234567890abcdefgh...\n-----END RSA PRIVATE KEY-----\nDeploy from build agent at 2001:db8:85a3::8a2e:370:7334."
+    }
+  ],
+  "spans": [
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 51,
+      "end": 153,
+      "entity_type": "PRIVATE_KEY"
+    },
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 181,
+      "end": 209,
+      "entity_type": "IPV6"
+    }
+  ]
+}

@@ -14,6 +14,7 @@ from azure_auth import get_openai_client_with_auth
 from config import config
 import argparse
 from typing import List, Dict, Any
+import guard
 # Mock ZaiClient for now - you can replace this with actual ZAI client when needed
 class ZaiClient:
     def __init__(self, api_key=None, base_url=None):
@@ -152,7 +153,9 @@ def setup_logging():
     console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
     logger.addHandler(console_handler)
-    
+
+    guard.install_log_redaction([file_handler, console_handler])
+
     return logger
 
 logger = setup_logging()
@@ -406,14 +409,16 @@ class IncidentProcessor:
         if summary:
             # Clean the summary text
             cleaned_summary = self.clean_azure_support_info(summary)
-            parts.append(f"--- Authored Summary ---\n{cleaned_summary}")
+            parts.append(f"--- Authored Summary ---\n{guard.spotlight_if_enabled(cleaned_summary)}")
 
-        # Add incident conversation
-        parts.append(f"--- Incident Discussion ---\n{conversation_text}")
+        # Add incident conversation. Spotlighted (when injection defense is
+        # enabled) because this text is attacker-influenceable -- customers
+        # and partners write directly into it.
+        parts.append(f"--- Incident Discussion ---\n{guard.spotlight_if_enabled(conversation_text)}")
 
         # Add Teams discussion if available
         if teams_discussion:
-            parts.append(f"--- Teams Discussion ---\n{teams_discussion}")
+            parts.append(f"--- Teams Discussion ---\n{guard.spotlight_if_enabled(teams_discussion)}")
 
         # Combine all text parts
         combined_text = "\n\n".join(parts)
@@ -463,6 +468,10 @@ class IncidentProcessor:
             incident_data: Incident data for memory/team analysis
         """
         try:
+            guard.set_incident_context(
+                (incident_data or {}).get('incident_id'), call_site="processor.generate_summary"
+            )
+
             # Check if content is multimodal (list of dicts with type/image_url keys)
             is_multimodal = False
             if isinstance(content, list) and len(content) > 0:
@@ -599,16 +608,17 @@ class IncidentProcessor:
 
             # Prepare messages - handle multimodal or text-only content
             with self.time_context("prepare_llm_messages", "ai", {"multimodal": is_multimodal}):
+                system_prompt_with_guard = str(system_prompt) + guard.injection_system_clause_suffix()
                 if is_multimodal:
                     # For multimodal, prepend enhanced user prompt to the content
                     # Find the first text item and prepend the enhanced prompt
                     messages = [
-                        {"role": "system", "content": str(system_prompt)},
+                        {"role": "system", "content": system_prompt_with_guard},
                         {"role": "user", "content": user_content}
                     ]
                 else:
                     messages = [
-                        {"role": "system", "content": str(system_prompt)},
+                        {"role": "system", "content": system_prompt_with_guard},
                         {"role": "user", "content": f"{str(enhanced_user_prompt)}\n\n{user_content}"}
                     ]
 
@@ -624,13 +634,14 @@ class IncidentProcessor:
                         parts = []
                         for part in content:
                             if part.get("type") == "text":
-                                text = part.get("text", part.get("content", "")) or ""
+                                text = guard.redact_text(part.get("text", part.get("content", "")) or "")
                                 parts.append(f"[text, len={len(text)}]: {repr(text[:max_show])}{'...' if len(text) > max_show else ''}")
                             else:
                                 parts.append(f"[{part.get('type')}]: {str(part)[:200]}...")
                         content_repr = "\n  ".join(parts)
                         content_len = "multimodal"
                     else:
+                        content = guard.redact_text(content)
                         content_len = len(content)
                         content_repr = repr(content[:max_show]) + ("..." if len(content) > max_show else "")
                     print(f"  [{i}] role={role}, content length={content_len}")

@@ -10,12 +10,18 @@
 .azure_openai_token_cache.json
 .env
 .env*
+!.env.example
 /venv*
-/__pycache__
+__pycache__/
 .DS_Store
 .idea/
 .vscode/
 logs/
+error.log
+.guard_audit/
+benchmarks/results.json
+promptguard-findings.json
+cmd/promptguard/promptguard
 query.kql
 prompts.json
 interactive_menu_prompts.json
@@ -30,6 +36,10 @@ Documentation/
 MCP-Proxy/
 vip_incidents/
 
-# Exclude all .md files except README.md
+# Exclude all .md files except README.md and the documentation this
+# security work depends on to be a legible portfolio artifact.
 **/*.md
 !README.md
+!docs/**/*.md
+!benchmarks/*.md
+!redteam/*.md

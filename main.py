@@ -13,6 +13,7 @@ import argparse
 import logging
 from typing import List, Dict, Tuple
 from timing_utils import start_timing, end_timing, time_operation, time_context, print_timing_summary, save_timing_report, reset_timing_data
+import guard
 
 # Configure centralized logging
 def setup_logging():
@@ -41,7 +42,9 @@ def setup_logging():
     console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
     logger.addHandler(console_handler)
-    
+
+    guard.install_log_redaction([file_handler, console_handler])
+
     return logger
 
 # Setup logging at module level
@@ -182,9 +185,9 @@ def get_free_text_prompts(user_description=None):
     print("GENERATED PROMPT (will be used for incident analysis)")
     print("=" * 60)
     print("\n--- system_prompt ---")
-    print(prompts.get("system_prompt", ""))
+    print(guard.redact_text(prompts.get("system_prompt", "")))
     print("\n--- user_prompt ---")
-    print(prompts.get("user_prompt", ""))
+    print(guard.redact_text(prompts.get("user_prompt", "")))
     print("=" * 60 + "\n")
     return prompts
 
@@ -223,8 +226,8 @@ def fetch_incident_data(incident_number):
         # Log all output to a debug file
         debug_log_path = f"logs/fetcher_debug_{incident_number}.log"
         with open(debug_log_path, "w") as log_file:
-            log_file.write("STDOUT:\n" + fetch_proc.stdout + "\n\n")
-            log_file.write("STDERR:\n" + fetch_proc.stderr + "\n")
+            log_file.write("STDOUT:\n" + guard.redact_text(fetch_proc.stdout) + "\n\n")
+            log_file.write("STDERR:\n" + guard.redact_text(fetch_proc.stderr) + "\n")
         
         logger.error(f"Database fetch failed for incident {incident_number}. Return code: {fetch_proc.returncode}")
         logger.error(f"STDOUT: {fetch_proc.stdout}")

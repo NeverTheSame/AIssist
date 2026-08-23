@@ -1,0 +1,82 @@
+{
+  "incident_id": "SYN-1001",
+  "total_entries": 2,
+  "conversation": [
+    {
+      "timestamp": "2026-01-05T10:00:00Z",
+      "author": "customer",
+      "content": "Hi, I'm Jane Doe, reaching out from jane.doe@contoso.com. My machine DESKTOP-AB12CD3 can't reach the VPN at 10.0.4.17."
+    },
+    {
+      "timestamp": "2026-01-05T10:05:00Z",
+      "author": "support",
+      "content": "Thanks Jane. Can you confirm your tenant 66666666-7777-8888-9999-aaaaaaaaaaaa and subscription 11111111-2222-3333-4444-555555555555?"
+    }
+  ],
+  "spans": [
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 8,
+      "end": 16,
+      "entity_type": "PERSON"
+    },
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 36,
+      "end": 56,
+      "entity_type": "EMAIL"
+    },
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 69,
+      "end": 84,
+      "entity_type": "HOSTNAME"
+    },
+    {
+      "entry_index": 0,
+      "field": "content",
+      "start": 108,
+      "end": 117,
+      "entity_type": "IPV4"
+    },
+    {
+      "entry_index": 1,
+      "field": "content",
+      "start": 41,
+      "end": 77,
+      "entity_type": "AZURE_TENANT_ID"
+    },
+    {
+      "entry_index": 1,
+      "field": "content",
+      "start": 95,
+      "end": 131,
+      "entity_type": "AZURE_SUBSCRIPTION_ID"
+    },
+    {
+      "entry_index": null,
+      "field": "summary",
+      "start": 9,
+      "end": 17,
+      "entity_type": "PERSON"
+    },
+    {
+      "entry_index": null,
+      "field": "summary",
+      "start": 19,
+      "end": 39,
+      "entity_type": "EMAIL"
+    },
+    {
+      "entry_index": null,
+      "field": "summary",
+      "start": 84,
+      "end": 99,
+      "entity_type": "HOSTNAME"
+    }
+  ],
+  "summary": "Customer Jane Doe (jane.doe@contoso.com) reported VPN connectivity issues from host DESKTOP-AB12CD3."
+}

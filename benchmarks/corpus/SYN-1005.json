@@ -1,0 +1,17 @@
+{
+  "incident_id": "SYN-1005",
+  "total_entries": 2,
+  "conversation": [
+    {
+      "timestamp": "2026-01-09T08:00:00Z",
+      "author": "support",
+      "content": "Restarted the print spooler and cleared the queue. Issue is resolved after the service restart; no further customer contact needed."
+    },
+    {
+      "timestamp": "2026-01-09T08:05:00Z",
+      "author": "support",
+      "content": "Verified fix in staging, no regressions observed across the smoke suite."
+    }
+  ],
+  "spans": []
+}

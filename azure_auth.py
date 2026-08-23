@@ -11,6 +11,8 @@ from typing import Optional, Tuple
 from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import ClientAuthenticationError
 
+import guard
+
 logger = logging.getLogger(__name__)
 TOKEN_CACHE_FILE = ".azure_openai_token_cache.json"
 
@@ -107,6 +109,7 @@ def get_openai_client_with_auth(config) -> Tuple['AzureOpenAI', str]:
             timeout=300
         )
         logger.info(f"Using Azure AD authentication for endpoint: {config.ai_service_endpoint}")
+        client = guard.wrap_client(client)
         return client, "azure_ad"
     else:
         client = AzureOpenAI(
@@ -116,4 +119,5 @@ def get_openai_client_with_auth(config) -> Tuple['AzureOpenAI', str]:
             timeout=300
         )
         logger.info(f"Using API key authentication for endpoint: {config.ai_service_endpoint}")
+        client = guard.wrap_client(client)
         return client, "api_key"
