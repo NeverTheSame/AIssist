@@ -40,6 +40,7 @@ vip_incidents/
 # security work depends on to be a legible portfolio artifact.
 **/*.md
 !README.md
+!CHANGELOG.md
 !docs/**/*.md
 !benchmarks/*.md
 !redteam/*.md
