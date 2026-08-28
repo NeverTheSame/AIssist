@@ -58,26 +58,32 @@ class ArticleSearcher:
         # Initialize embedding client (always uses regular Azure OpenAI)
         self._init_embedding_client()
         
-        # Load articles and embeddings
-        self.articles = []
-        self.embeddings = []
-        self._load_articles()
-        
-        # Relevance scoring threshold
-        self.relevance_threshold = 5.0
-        
-        # Maximum candidates for LLM processing
-        self.max_candidates = 20
-        
-        # Final results count
-        self.final_results_count = 5
-        
         # Local embedder (initialized lazily)
         self.local_embedder = None
-        
+
         # Qdrant client (initialized lazily if vector DB is Qdrant)
         self.qdrant_client = None
         self.qdrant_collection = "articles"
+
+        # pgvector connection (initialized lazily if PGVECTOR_DSN is set)
+        self.pgvector_conn = None
+        self.pgvector_table = "articles"
+
+        # Load articles and embeddings. Must run after the client defaults
+        # above so a connection it opens (Qdrant or pgvector) isn't
+        # immediately overwritten back to None.
+        self.articles = []
+        self.embeddings = []
+        self._load_articles()
+
+        # Relevance scoring threshold
+        self.relevance_threshold = 5.0
+
+        # Maximum candidates for LLM processing
+        self.max_candidates = 20
+
+        # Final results count
+        self.final_results_count = 5
         
         # Always use all-MiniLM-L6-v2 for consistent embeddings (384 dimensions)
         try:
@@ -155,11 +161,33 @@ class ArticleSearcher:
             self.embedding_client = None
 
     def _load_articles(self):
-        """Load articles from the specified path (vector DB or JSON)."""
+        """Load articles from the specified path (pgvector, Qdrant, or JSON)."""
+        # pgvector takes priority when configured: either PGVECTOR_DSN is set,
+        # or vector_db_path itself is a postgres URL.
+        pgvector_dsn = config.pgvector_dsn or (
+            self.vector_db_path
+            if self.vector_db_path and self.vector_db_path.startswith(("postgres://", "postgresql://"))
+            else None
+        )
+        if pgvector_dsn:
+            try:
+                from pgvector_store import connect as pgvector_connect, ensure_schema
+                self.pgvector_conn = pgvector_connect(pgvector_dsn)
+                self.pgvector_table = config.pgvector_table
+                ensure_schema(self.pgvector_conn, self.pgvector_table)
+                logger.info(
+                    f"Connected to pgvector table '{self.pgvector_table}' for article retrieval"
+                )
+                return
+            except ImportError as e:
+                logger.warning(f"pgvector requested but dependencies missing: {e}, falling back")
+            except Exception as e:
+                logger.warning(f"Failed to connect to pgvector: {e}, falling back")
+
         if not self.vector_db_path:
             logger.warning("No vector database path specified")
             return
-        
+
         # Check if it's a Qdrant database directory
         is_qdrant_db = os.path.isdir(self.vector_db_path) and os.path.exists(
             os.path.join(self.vector_db_path, "config.json")
@@ -359,7 +387,24 @@ class ArticleSearcher:
             # Using all-MiniLM-L6-v2 embeddings with 384 dimensions for consistency
             article_dimensions = len(query_embedding)  # Should be 384 for all-MiniLM-L6-v2
             logger.info(f"Using all-MiniLM-L6-v2 embeddings with {article_dimensions} dimensions for consistent semantic search")
-            
+
+            query_embedding_list = (
+                query_embedding.tolist() if isinstance(query_embedding, np.ndarray) else query_embedding
+            )
+
+            # Try pgvector first if a connection is open
+            if getattr(self, "pgvector_conn", None):
+                try:
+                    from pgvector_store import search as pgvector_search
+                    candidates = pgvector_search(
+                        self.pgvector_conn, self.pgvector_table, query_embedding_list, top_k
+                    )
+                    if candidates:
+                        logger.info(f"pgvector search returned {len(candidates)} candidates")
+                        return candidates
+                except Exception as e:
+                    logger.warning(f"pgvector search failed: {e}, falling back")
+
             # Try using Qdrant if available
             if hasattr(self, 'qdrant_client') and self.qdrant_client:
                 try:

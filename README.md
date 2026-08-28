@@ -64,6 +64,7 @@ The tool follows a sophisticated three-stage pipeline with advanced AI integrati
 ### AI and Machine Learning
 - **mem0**: Universal memory layer for AI agents providing persistent context
 - **Local Embeddings**: all-MiniLM-L6-v2 model for consistent semantic search
+- **pgvector**: Postgres extension for KB/article retrieval (alternative to Qdrant, see `pgvector_store.py`)
 - **TF-IDF Vectorization**: Fallback text similarity matching
 - **Cosine Similarity**: Text matching algorithms for article search
 
@@ -286,6 +287,10 @@ NOISE_FILTER_CONTENT_PREFIX=Boilerplate text prefix to match
 DEFAULT_ARTICLES_EMBEDDINGS_PATH=/path/to/article_embeddings.json
 VECTOR_DB_PATH=/path/to/qdrant_db
 ARTICLES_BASE_PATH=/path/to/articles
+
+# pgvector backend (optional; takes priority over Qdrant/JSON when set)
+PGVECTOR_DSN=postgresql://user:password@host:5432/dbname
+PGVECTOR_TABLE=articles
 ```
 
 ## How to Run
@@ -585,6 +590,36 @@ The summarizer includes memory integration using [mem0](https://github.com/mem0a
 
 ### Vector Database Architecture
 
+Article retrieval (`article_searcher.py`) supports two vector backends behind
+the same interface: set `PGVECTOR_DSN` to use Postgres+pgvector, or leave it
+unset to use Qdrant (the default). Whichever is active, `_semantic_search()`
+returns candidates in the same shape, so nothing downstream (scoring,
+re-ranking, gap analysis) needs to know which one answered.
+
+#### pgvector
+
+Set `PGVECTOR_DSN` (a `postgresql://` URL) and, optionally, `PGVECTOR_TABLE`
+(default `articles`) in `.env`. See `pgvector_store.py`:
+
+- `ensure_schema()` creates the article table and an HNSW cosine index on
+  first use (`CREATE EXTENSION IF NOT EXISTS vector`, so a plain Postgres
+  instance with the pgvector extension installed is enough)
+- `upsert_articles()` writes `(article_path, title, content_summary,
+  embedding)` rows, keyed on `article_path`
+- `search()` runs `ORDER BY embedding <=> $1::vector` and returns
+  `article_path` / `title` / `content_summary` / `semantic_similarity`
+- Embeddings are the same all-MiniLM-L6-v2, 384-dimension vectors used
+  everywhere else in this file, so a pgvector table and a Qdrant collection
+  are interchangeable for the same article corpus
+
+Tested against a real `pgvector/pgvector:pg16` container (`tests/test_pgvector_store.py`,
+skipped unless `PGVECTOR_TEST_DSN` is set — see that file's docstring for the
+one-line docker command). This is the honesty pattern used elsewhere in this
+codebase for anything that needs live infrastructure: not run means not
+claimed, not "should work."
+
+#### Qdrant (default)
+
 The summarizer uses Qdrant as its vector database, which provides several key benefits:
 
 #### Semantic Search Capabilities
@@ -787,6 +822,7 @@ AIssist/
 ├── transformer.py              # Data transformation and cleaning
 ├── kusto_fetcher.py            # Azure Kusto data fetching
 ├── article_searcher.py         # Article search and vector operations
+├── pgvector_store.py            # pgvector-backed retrieval (schema, upsert, cosine search)
 ├── azure_devops_client.py      # Azure DevOps API client for work items
 ├── azure_auth.py                # Azure authentication helpers
 ├── config.py                    # Configuration management

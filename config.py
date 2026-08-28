@@ -54,8 +54,10 @@ class Config:
                     if value.startswith(('"', "'")) and value.endswith(('"', "'")):
                         value = value[1:-1]
                     
-                    # Set environment variable
-                    os.environ[key] = value
+                    # Fill gaps only: a real value already exported by the
+                    # shell (or set programmatically before Config() runs)
+                    # must never be clobbered by a .env/.env.example placeholder.
+                    os.environ.setdefault(key, value)
     
     def _init_config(self):
         """Initialize configuration from environment variables."""
@@ -94,6 +96,12 @@ class Config:
         self.default_vector_db_path = os.environ.get('DEFAULT_ARTICLES_EMBEDDINGS_PATH')
         self.vector_db_path = os.environ.get('VECTOR_DB_PATH')
         self.articles_base_path = os.environ.get('ARTICLES_BASE_PATH')
+
+        # pgvector retrieval backend (optional, takes priority over Qdrant/JSON
+        # when set; see pgvector_store.py). VECTOR_DB_PATH set to a
+        # postgres://... URL works too.
+        self.pgvector_dsn = os.environ.get('PGVECTOR_DSN')
+        self.pgvector_table = os.environ.get('PGVECTOR_TABLE', 'articles')
 
         # Azure DevOps Configuration
         self.azure_devops_org = os.environ.get('AZURE_DEVOPS_ORG')
